@@ -1,0 +1,38 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# 2-space indent for Java -- matches config/checkstyle/google_checks.xml's
+# Indentation module (basicOffset=2), i.e. Google Java Style, NOT the more
+# common 4-space Java convention. Kotlin (Gradle build scripts) keeps the
+# conventional 4-space indent since Checkstyle never lints .kts files.
+[*.java]
+indent_style = space
+indent_size = 2
+max_line_length = 100
+
+[*.{kt,kts}]
+indent_style = space
+indent_size = 4
+max_line_length = 100
+
+[*.{c,h}]
+indent_style = space
+indent_size = 4
+
+[*.{xml,yml,yaml,json}]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[{gradlew,*.sh}]
+end_of_line = lf
+
+[gradlew.bat]
+end_of_line = crlf

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs exclude filter.
+
+  Intentionally near-empty for now. `sh.tamga.sdk.internal.jni` (the JNI
+  binding layer, docs/plans/tamga-java.plan.md Section B) is the one package
+  where SpotBugs' static analysis is most likely to produce noise that isn't
+  actually wrong (native-call side effects, `System.load` with a
+  dynamically-resolved path), add a narrowly-scoped Match exclusion there
+  if/when a specific rule proves to be a false positive against that
+  package's real design, with a comment explaining WHY it's a false positive.
+  Do not add a blanket package-wide exclusion for `internal.jni` preemptively:
+  that package is exactly where security-reviewer mandates the tightest
+  scrutiny (see CLAUDE.md), and SpotBugs findings there are signal, not noise,
+  until proven otherwise.
+-->
+<FindBugsFilter>
+</FindBugsFilter>

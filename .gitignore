@@ -1,0 +1,37 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/**/build/
+
+# JNI native build artifacts (jni/CMakeLists.txt output dirs)
+jni/build/
+jni/cmake-build-*/
+jni/CMakeFiles/
+jni/CMakeCache.txt
+
+# Built native libraries are published as GitHub Release / packaging
+# artifacts, never committed into src/main/resources/native/*/ directly.
+src/main/resources/native/**/*.so
+src/main/resources/native/**/*.dylib
+src/main/resources/native/**/*.dll
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.classpath
+.project
+.factorypath
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local override / secrets — never commit a real value for these
+local.properties
+*.env
+.env

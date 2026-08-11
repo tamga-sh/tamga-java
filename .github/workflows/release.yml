@@ -1,0 +1,77 @@
+name: Release
+
+# Release automation for tamga-java, in two parts:
+#
+# 1. `release-please` (release-type: simple) watches conventional-commit messages on `main` and
+#    maintains a standing "Release PR" that accumulates CHANGELOG.md entries. It manages the
+#    changelog and git tag ONLY -- it does not bump a version file anywhere in this repo, because
+#    `com.palantir.git-version` (wired in build.gradle.kts) derives the actual build version from
+#    the git tag at build time. `git tag v0.2.0` + a build IS the entire "bump the version"
+#    operation -- there is no hand-maintained version property to keep in sync. Merging the
+#    Release PR cuts the tag and publishes a GitHub Release.
+#
+# 2. The `publish` job runs on `release: published` and runs `./gradlew publishToMavenCentral`,
+#    using the vanniktech/gradle-maven-publish-plugin (see build.gradle.kts's `mavenPublishing {}`
+#    block) targeting the CENTRAL PUBLISHER PORTAL (central.sonatype.com) -- explicitly NOT the
+#    legacy OSSRH staging-repo flow, which Sonatype is sunsetting. Signing uses in-memory GPG keys
+#    (no on-disk keyring ever touches the CI runner) and Portal TOKEN credentials (not a Sonatype
+#    JIRA username/password, which belongs to the legacy OSSRH flow this pipeline deliberately does
+#    not use).
+#
+# Because version comes from the git tag (job 2 checks out the tag the Release was cut from), the
+# two jobs never race on "what version are we publishing" -- there's no version file for them to
+# disagree about.
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: release-please
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          release-type: simple
+
+  publish:
+    name: Publish to Maven Central
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags so com.palantir.git-version resolves the exact tag the Release
+          # was cut from, not a shallow-clone "unspecified" fallback.
+          fetch-depth: 0
+
+      - name: Set up JDK 17 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Publish to the Central Publisher Portal
+        run: ./gradlew publishToMavenCentral --no-configuration-cache --no-daemon
+        env:
+          # In-memory GPG signing -- signing plugin in build.gradle.kts reads these two project
+          # properties directly by name; no on-disk keyring is generated or checked out in CI.
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.ORG_GRADLE_PROJECT_SIGNING_IN_MEMORY_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.ORG_GRADLE_PROJECT_SIGNING_IN_MEMORY_KEY_PASSWORD }}
+          # Central Publisher Portal TOKEN pair (central.sonatype.com) -- NOT legacy OSSRH
+          # username/password. The ORG_GRADLE_PROJECT_ prefix is Gradle's standard env-var ->
+          # project-property auto-mapping convention; the vanniktech plugin reads
+          # `mavenCentralUsername`/`mavenCentralPassword` project properties.
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}

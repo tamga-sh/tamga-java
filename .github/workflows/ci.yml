@@ -1,0 +1,63 @@
+name: CI
+
+# Static analysis runs as its own step BEFORE `./gradlew check` so a Checkstyle/SpotBugs failure
+# short-circuits the more expensive build/test/coverage steps -- see
+# docs/plans/tamga-java.plan.md §5. Both tasks are also wired as `check` dependencies in
+# build.gradle.kts, so re-running them inside `./gradlew check` is a cheap up-to-date no-op, not
+# duplicated work.
+#
+# The 3-OS matrix leg is NOT "run the same Java tests three times" -- the native JNI build
+# (jni/CMakeLists.txt) differs meaningfully per OS (different C toolchain, different shared-library
+# extension: .so/.dylib/.dll), so this exercises three distinct native-build code paths once
+# Section B lands. Today, with no native build wired yet, all three legs run the identical
+# pure-Java path -- that's expected and will diverge once the JNI CMake build is real.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / Temurin ${{ matrix.java }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        java: [17, 21]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }} (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Checkstyle (Google Java Style)
+        run: ./gradlew checkstyleMain checkstyleTest --no-daemon
+
+      - name: SpotBugs
+        run: ./gradlew spotbugsMain spotbugsTest --no-daemon
+
+      - name: Build, test, and verify coverage (80% minimum)
+        run: ./gradlew check --no-daemon
+
+      # Uploaded once per run, not once per matrix leg -- otherwise Codecov sees 6 reports for the
+      # same commit and PR annotations get noisy. ubuntu-latest / Java 17 is the canonical leg
+      # since it's the lower bound of the supported JDK matrix.
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.java == 17
+        uses: codecov/codecov-action@v4
+        with:
+          files: build/reports/jacoco/test/jacocoTestReport.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
