@@ -1,0 +1,13 @@
+# Normalize line endings to LF on checkout, on every platform. Without this, a
+# Windows CI runner's git checkout can silently convert committed LF endings to
+# CRLF depending on that runner's core.autocrlf setting -- which is exactly what
+# caused a Windows-only Checkstyle false divergence on an otherwise-passing PR:
+# an empty `//` paragraph-break comment line becomes a comment containing a
+# stray trailing \r once checked out as CRLF, and Checkstyle's
+# singleLineCommentStartWithSpace check treats that differently than a
+# genuinely empty comment, failing only on windows-latest while
+# macos-latest/ubuntu-latest (LF checkouts) passed the identical source.
+* text=auto eol=lf
+
+# Windows batch scripts conventionally require CRLF to run correctly.
+*.bat text eol=crlf

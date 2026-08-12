@@ -148,7 +148,6 @@ public final class MachineFile {
     // "aes-256-gcm+ed25519", "rsa-sha256", "ecdsa-sha256"), so there is no single fixed literal
     // set to match exactly. alg is never used for signature-scheme dispatch (see verify above)
     // -- only for this encrypted-vs-plain payload gating.
-    //
     // BUGFIX (found by independent review): only "aes-256-gcm" reliably identifies an encrypted
     // payload. A plain (unencrypted) non-Ed25519 file's alg is just its signature suffix (e.g.
     // "rsa-sha256", "ecdsa-sha256") with no "base64" substring at all, so a previous
