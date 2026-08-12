@@ -2,16 +2,16 @@
 <!--
   SpotBugs exclude filter.
 
-  Intentionally near-empty for now. `sh.tamga.sdk.crypto` (native Ed25519/
-  AES-GCM/HKDF/ECDSA/RSA verification, see CLAUDE.md's "Crypto Architecture")
-  is the one package where SpotBugs' static analysis is most likely to
-  produce noise that isn't actually wrong -- add a narrowly-scoped Match
-  exclusion there if/when a specific rule proves to be a false positive
-  against that package's real design, with a comment explaining WHY it's a
-  false positive. Do not add a blanket package-wide exclusion for `crypto`
-  preemptively: that package is exactly where security-reviewer mandates the
-  tightest scrutiny, and SpotBugs findings there are signal, not noise, until
-  proven otherwise.
+  Intentionally near-empty for now. `sh.tamga.sdk.crypto` (native Ed25519,
+  AES-GCM, HKDF, ECDSA, and RSA verification; see CLAUDE.md's "Crypto
+  Architecture") is the one package where SpotBugs' static analysis is most
+  likely to produce noise that isn't actually wrong: add a narrowly-scoped
+  Match exclusion there if/when a specific rule proves to be a false
+  positive against that package's real design, with a comment explaining
+  WHY it's a false positive. Do not add a blanket package-wide exclusion for
+  `crypto` preemptively: that package is exactly where security-reviewer
+  mandates the tightest scrutiny, and SpotBugs findings there are signal,
+  not noise, until proven otherwise.
 -->
 <FindBugsFilter>
 </FindBugsFilter>
