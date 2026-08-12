@@ -9,7 +9,7 @@ activation, offline license/machine verification, and machine/component/process 
 Java and (eventually) Android applications. It is one of two SDKs (with `tamga-swift`) that do not
 reimplement Tamga's cryptographic verification logic natively; instead it binds to `tamga-c`, the
 Rust reference implementation exposed through a stable C ABI, via JNI. Full task breakdown and
-current build status: [`docs/plans/tamga-java.plan.md`](docs/plans/tamga-java.plan.md). Protocol/
+current build status: [`../docs/plans/tamga-java.plan.md`](../docs/plans/tamga-java.plan.md) (lives one directory up, in the sibling `tamga-sdk` monorepo, not inside this repo). Protocol/
 feature spec this SDK is built against — every field name, endpoint, and enum value comes from
 here: [`tamga-api/docs/sdk.md`](https://github.com/tamga-sh/tamga-api/blob/main/docs/sdk.md).
 
