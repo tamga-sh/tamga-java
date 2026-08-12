@@ -62,6 +62,7 @@ jobs:
       - name: Detect doc-only changes
         if: github.event_name == 'pull_request'
         id: filter
+        shell: bash
         run: |
           set -eu
           changed=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")
