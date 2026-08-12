@@ -33,29 +33,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Docs-only PRs (README/CLAUDE.md/CHANGELOG/etc.) have nothing for
+      # Checkstyle/SpotBugs/the JaCoCo coverage gate to meaningfully check --
+      # running them anyway means EVERY PR touching only prose fails the
+      # coverage gate at the current 0%-implemented scaffold stage (this
+      # repo's own CLAUDE.md is explicit that the 80% minimum must NOT be
+      # loosened to work around that -- it's a real gate for real code, not
+      # a value to weaken). This detects that case and skips the
+      # code-verification steps below for it specifically, while still
+      # letting the job itself report success so branch protection's
+      # required status checks aren't left permanently pending. Does NOT
+      # apply to `push` (post-merge) runs, which always run everything
+      # regardless of what changed.
+      - name: Detect doc-only changes
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+
       - name: Set up JDK ${{ matrix.java }} (Temurin)
+        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
 
       - name: Set up Gradle
+        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         uses: gradle/actions/setup-gradle@v4
 
       - name: Checkstyle (Google Java Style)
+        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         run: ./gradlew checkstyleMain checkstyleTest --no-daemon
 
       - name: SpotBugs
+        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         run: ./gradlew spotbugsMain spotbugsTest --no-daemon
 
       - name: Build, test, and verify coverage (80% minimum)
+        if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         run: ./gradlew check --no-daemon
 
       # Uploaded once per run, not once per matrix leg -- otherwise Codecov sees 6 reports for the
       # same commit and PR annotations get noisy. ubuntu-latest / Java 17 is the canonical leg
       # since it's the lower bound of the supported JDK matrix.
       - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-latest' && matrix.java == 17
+        if: matrix.os == 'ubuntu-latest' && matrix.java == 17 && (github.event_name != 'pull_request' || steps.filter.outputs.code == 'true')
         uses: codecov/codecov-action@v4
         with:
           files: build/reports/jacoco/test/jacocoTestReport.xml
