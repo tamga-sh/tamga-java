@@ -14,4 +14,20 @@
   not noise, until proven otherwise.
 -->
 <FindBugsFilter>
+  <!--
+    TamgaJsonMapper.instance() intentionally returns the shared, module-wide
+    ObjectMapper instance rather than a defensive copy. Jackson's own docs
+    recommend reusing a single configured ObjectMapper: it is thread-safe
+    for concurrent reads once configured, and construction/configuration is
+    comparatively expensive, so copying it on every call would defeat the
+    entire point of sharing it, for a mutation risk this codebase's own
+    call sites never exercise (nothing here calls a mutating method on the
+    returned mapper). A false positive against this specific, deliberate
+    design, not a case to fix.
+  -->
+  <Match>
+    <Class name="sh.tamga.sdk.model.TamgaJsonMapper" />
+    <Method name="instance" />
+    <Bug pattern="MS_EXPOSE_REP" />
+  </Match>
 </FindBugsFilter>

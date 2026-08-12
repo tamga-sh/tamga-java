@@ -76,12 +76,16 @@ dependencies {
 
     // --- JSON ---
     // `FAIL_ON_UNKNOWN_PROPERTIES = false` config (forward-compat with server
-    // additions) lands in Transport's ObjectMapper setup in §C, not here.
+    // additions) lives in TamgaJsonMapper, shared by the checkout/proof
+    // offline-decode path and (eventually) TamgaClient's response mapping.
     api("com.fasterxml.jackson.core:jackson-databind:2.22.1")
     // Optional<T> (de)serialization support for model fields that are
     // genuinely absent-vs-null on the wire (see ecc:java-coding-standards on
     // Optional usage — fields, not method params).
     api("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.22.1")
+    // Instant/OffsetDateTime (de)serialization -- jackson-databind alone does
+    // not understand java.time types.
+    api("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.1")
 
     // --- Test (test scope only) ---
     testImplementation("org.junit.jupiter:junit-jupiter:5.14.4")
