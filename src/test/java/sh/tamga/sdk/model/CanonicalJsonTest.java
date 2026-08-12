@@ -1,6 +1,7 @@
 package sh.tamga.sdk.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -138,6 +139,22 @@ class CanonicalJsonTest {
     assertThat(CanonicalJson.serialize(controlOne)).isEqualTo(expectedOne);
     assertThat(CanonicalJson.serialize(controlUnitSeparator)).isEqualTo(expectedUnitSeparator);
     assertThat(CanonicalJson.serialize(nulByteInTheMiddle)).isEqualTo(expectedNulInTheMiddle);
+  }
+
+  @Test
+  void backspaceFormFeedAndCarriageReturnUseTheirShortEscapes() {
+    // Regression: only \n and \t were exercised elsewhere -- \b/\f/\r are separate branches in
+    // writeEscapedString's switch and were previously untested.
+    assertThat(CanonicalJson.serialize("a" + (char) 0x08 + "b")).isEqualTo("\"a\\bb\"");
+    assertThat(CanonicalJson.serialize("a" + (char) 0x0c + "b")).isEqualTo("\"a\\fb\"");
+    assertThat(CanonicalJson.serialize("a" + (char) 0x0d + "b")).isEqualTo("\"a\\rb\"");
+  }
+
+  @Test
+  void serializeThrowsForAnUnsupportedValueType() {
+    assertThatThrownBy(() -> CanonicalJson.serialize(new Object()))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Unsupported JSON value type");
   }
 
   @Test

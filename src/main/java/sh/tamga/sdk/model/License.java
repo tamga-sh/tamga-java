@@ -100,10 +100,22 @@ public final class License {
     JsonApiPayload<Attributes> payload =
         TamgaJsonMapper.instance().readValue(json, new TypeReference<JsonApiPayload<Attributes>>() {
         });
+    // SECURITY regression (found by independent review): a literal JSON `null` payload
+    // deserializes to a null `payload` itself, and a payload with a missing or explicit-null
+    // "data" field deserializes to a null `payload.data()` -- both previously reached
+    // `resource.attributes()` unguarded, throwing an uncaught NullPointerException instead of the
+    // documented IOException (which callers such as LicenseFile.verifyAndDecrypt already convert
+    // to a TamgaCheckoutException.OfflineFileFormatException).
+    if (payload == null) {
+      throw new IOException("License resource payload is empty.");
+    }
     return fromResource(payload.data());
   }
 
-  private static License fromResource(JsonApiResource<Attributes> resource) {
+  private static License fromResource(JsonApiResource<Attributes> resource) throws IOException {
+    if (resource == null) {
+      throw new IOException("License resource payload is missing its data object.");
+    }
     Attributes attrs = resource.attributes();
     if (attrs == null) {
       return new License(resource.id(), null, false, null, 0, null, null, null);

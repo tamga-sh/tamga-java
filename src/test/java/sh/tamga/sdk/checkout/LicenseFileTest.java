@@ -243,6 +243,12 @@ class LicenseFileTest {
         .isInstanceOf(TamgaCheckoutException.OfflineFileFormatException.class);
   }
 
+  @Test
+  void parseThrowsForMissingEndMarker() {
+    assertThatThrownBy(() -> LicenseFile.parse("-----BEGIN LICENSE FILE-----\nnot a pem file"))
+        .isInstanceOf(TamgaCheckoutException.OfflineFileFormatException.class);
+  }
+
   /**
    * SECURITY regression: a crafted string shorter than {@code beginMarker.length() +
    * endMarker.length()} that still independently satisfies startsWith/endsWith must not crash the

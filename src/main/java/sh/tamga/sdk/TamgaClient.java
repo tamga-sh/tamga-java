@@ -9,8 +9,9 @@ package sh.tamga.sdk;
  * will eventually satisfy.
  *
  * <p>Intended contents once implemented (do not build networking/crypto here directly -- see this
- * repository's {@code CLAUDE.md} crypto-boundary rule; delegate to {@link Transport} and {@code
- * sh.tamga.sdk.internal.jni.TamgaNative}):
+ * repository's {@code CLAUDE.md} "Crypto Architecture" section; delegate HTTP transport to {@link
+ * Transport} and cryptographic verification to {@code sh.tamga.sdk.crypto} via the {@code
+ * sh.tamga.sdk.checkout}/{@code sh.tamga.sdk.proof} composition layers):
  *
  * <ul>
  *   <li>A {@code Builder} requiring {@code accountId} (String) and {@code baseUrl}/{@code host};

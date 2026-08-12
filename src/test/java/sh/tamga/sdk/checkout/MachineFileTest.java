@@ -10,9 +10,11 @@ import java.security.SecureRandom;
 import java.security.spec.ECGenParameterSpec;
 import java.util.Base64;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
+import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.junit.jupiter.api.Test;
 import sh.tamga.sdk.crypto.Hkdf;
 import sh.tamga.sdk.error.TamgaCheckoutException;
+import sh.tamga.sdk.model.HeartbeatStatus;
 import sh.tamga.sdk.model.LicenseScheme;
 import sh.tamga.sdk.model.Machine;
 import sh.tamga.sdk.support.CheckoutFixture;
@@ -89,6 +91,103 @@ class MachineFileTest {
     byte[] publicKey = keyPair.getPublic().getEncoded();
 
     assertThat(file.verify(LicenseScheme.RSA_2048_PKCS1_PSS_SIGN, publicKey)).isTrue();
+  }
+
+  @Test
+  void verifyReturnsFalseForEcdsaP256SignedFileWithWrongPublicKey() throws Exception {
+    KeyPair keyPair = generateP256KeyPair();
+    KeyPair otherKeyPair = generateP256KeyPair();
+    byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
+    String enc = CheckoutFixture.plainEnc(json);
+    String sig = CheckoutFixture.ecdsaSign(enc, keyPair.getPrivate());
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "ecdsa-sha256");
+
+    MachineFile file = MachineFile.parse(pem);
+    byte[] wrongPublicKey = otherKeyPair.getPublic().getEncoded();
+
+    assertThat(file.verify(LicenseScheme.ECDSA_P256_SIGN, wrongPublicKey)).isFalse();
+  }
+
+  @Test
+  void verifyReturnsFalseForRsaPkcs1SignedFileWithWrongPublicKey() throws Exception {
+    KeyPair keyPair = generateRsaKeyPair();
+    KeyPair otherKeyPair = generateRsaKeyPair();
+    byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
+    String enc = CheckoutFixture.plainEnc(json);
+    String sig = CheckoutFixture.rsaPkcs1Sign(enc, keyPair.getPrivate());
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "rsa-sha256");
+
+    MachineFile file = MachineFile.parse(pem);
+    byte[] wrongPublicKey = otherKeyPair.getPublic().getEncoded();
+
+    assertThat(file.verify(LicenseScheme.RSA_2048_PKCS1_SIGN, wrongPublicKey)).isFalse();
+  }
+
+  @Test
+  void verifyReturnsFalseForRsaPssSignedFileWithWrongPublicKey() throws Exception {
+    KeyPair keyPair = generateRsaKeyPair();
+    KeyPair otherKeyPair = generateRsaKeyPair();
+    byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
+    String enc = CheckoutFixture.plainEnc(json);
+    String sig = CheckoutFixture.rsaPssSign(enc, keyPair.getPrivate());
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "rsa-pss-sha256");
+
+    MachineFile file = MachineFile.parse(pem);
+    byte[] wrongPublicKey = otherKeyPair.getPublic().getEncoded();
+
+    assertThat(file.verify(LicenseScheme.RSA_2048_PKCS1_PSS_SIGN, wrongPublicKey)).isFalse();
+  }
+
+  /**
+   * CRITICAL regression (mirrors {@code LicenseFileTest}'s equivalent): the signature must cover
+   * {@code enc}'s base64 STRING bytes, not the decoded payload bytes -- the single most common
+   * implementation mistake across this SDK family, and {@code MachineFile.verify}'s message-bytes
+   * extraction is a separate call site from {@code LicenseFile}'s, so it needs its own regression
+   * rather than relying on the sibling type's test to stand in for it.
+   */
+  @Test
+  void verifyFailsWhenSignatureWasComputedOverDecodedBytesNotEncsBase64StringBytes() {
+    Ed25519PrivateKeyParameters key = generateEd25519Key();
+    byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
+    String enc = CheckoutFixture.plainEnc(json);
+
+    // Deliberately sign the DECODED bytes (json) instead of enc's string bytes.
+    Ed25519Signer signer = new Ed25519Signer();
+    signer.init(true, key);
+    signer.update(json, 0, json.length);
+    String sig = Base64.getEncoder().encodeToString(signer.generateSignature());
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519");
+
+    MachineFile file = MachineFile.parse(pem);
+    byte[] publicKey = key.generatePublicKey().getEncoded();
+
+    assertThat(file.verify(LicenseScheme.ED25519_SIGN, publicKey)).isFalse();
+  }
+
+  @Test
+  void verifyAndDecryptDecodesEveryMachineField() {
+    Ed25519PrivateKeyParameters signingKey = generateEd25519Key();
+    String fingerprint = "full-fields-fingerprint";
+    byte[] json = CheckoutFixture.fullMachinePayloadJson(fingerprint);
+    String enc = CheckoutFixture.plainEnc(json);
+    String sig = CheckoutFixture.ed25519Sign(enc, signingKey);
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519");
+
+    MachineFile file = MachineFile.parse(pem);
+    byte[] publicKey = signingKey.generatePublicKey().getEncoded();
+    Machine machine = file.verifyAndDecrypt(LicenseScheme.ED25519_SIGN, publicKey,
+        "unused-for-plain", fingerprint);
+
+    assertThat(machine.id()).isEqualTo("mach_123");
+    assertThat(machine.fingerprint()).isEqualTo(fingerprint);
+    assertThat(machine.name()).isEqualTo("build-server-01");
+    assertThat(machine.platform()).isEqualTo("linux-x86_64");
+    assertThat(machine.heartbeatStatus()).isEqualTo(HeartbeatStatus.ALIVE);
+    assertThat(machine.lastHeartbeatAt()).isNotNull();
+    assertThat(machine.lastCheckOutAt()).isNotNull();
+    assertThat(machine.metadata()).containsEntry("region", "eu-west-1");
+    assertThat(machine.metadata()).containsEntry("cores", 8);
+    assertThat(machine.metadata()).containsEntry("gpu", false);
   }
 
   @Test
@@ -209,6 +308,12 @@ class MachineFileTest {
   @Test
   void parseThrowsForMissingBeginMarker() {
     assertThatThrownBy(() -> MachineFile.parse("not a pem file\n-----END MACHINE FILE-----"))
+        .isInstanceOf(TamgaCheckoutException.OfflineFileFormatException.class);
+  }
+
+  @Test
+  void parseThrowsForMissingEndMarker() {
+    assertThatThrownBy(() -> MachineFile.parse("-----BEGIN MACHINE FILE-----\nnot a pem file"))
         .isInstanceOf(TamgaCheckoutException.OfflineFileFormatException.class);
   }
 

@@ -87,6 +87,17 @@ class AesGcmTest {
   }
 
   @Test
+  void openThrowsMalformedInputForWrongLengthKey() {
+    byte[] wrongLengthKey = randomBytes(31);
+    byte[] nonce = randomBytes(AesGcm.NONCE_LENGTH);
+    byte[] ciphertext = randomBytes(16);
+    byte[] tag = randomBytes(AesGcm.TAG_LENGTH);
+
+    assertThatThrownBy(() -> AesGcm.open(wrongLengthKey, nonce, ciphertext, tag))
+        .isInstanceOf(AesGcm.MalformedAesGcmInputException.class);
+  }
+
+  @Test
   void sealThrowsMalformedInputForShortNonce() {
     byte[] key = randomBytes(32);
     byte[] shortNonce = randomBytes(8);

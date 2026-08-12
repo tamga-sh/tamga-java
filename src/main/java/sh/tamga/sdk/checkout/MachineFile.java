@@ -65,6 +65,15 @@ public final class MachineFile {
       throw new TamgaCheckoutException.OfflineFileFormatException(
           "Machine file certificate JSON is malformed: " + e.getMessage(), e);
     }
+    // SECURITY regression (found by independent review): a well-formed-but-incomplete
+    // certificate (missing enc/sig/alg, or explicit JSON nulls for them) previously reached
+    // certificate.enc.getBytes(...)/certificate.alg.contains(...) unguarded, throwing an
+    // uncaught NullPointerException instead of the documented TamgaCheckoutException -- fail here
+    // instead, with the right exception type, before any downstream code assumes non-null.
+    if (certificate.enc == null || certificate.sig == null || certificate.alg == null) {
+      throw new TamgaCheckoutException.OfflineFileFormatException(
+          "Machine file certificate is missing a required field (enc, sig, or alg).");
+    }
     return new MachineFile(certificate);
   }
 
@@ -139,15 +148,22 @@ public final class MachineFile {
     // "aes-256-gcm+ed25519", "rsa-sha256", "ecdsa-sha256"), so there is no single fixed literal
     // set to match exactly. alg is never used for signature-scheme dispatch (see verify above)
     // -- only for this encrypted-vs-plain payload gating.
+    //
+    // BUGFIX (found by independent review): only "aes-256-gcm" reliably identifies an encrypted
+    // payload. A plain (unencrypted) non-Ed25519 file's alg is just its signature suffix (e.g.
+    // "rsa-sha256", "ecdsa-sha256") with no "base64" substring at all, so a previous
+    // `else if (contains("base64"))` gate incorrectly fell through to the unsupported-algorithm
+    // branch and rejected legitimately-signed plain RSA/ECDSA machine files. Treating "not
+    // aes-256-gcm" as "plain" is security-neutral: alg is already unauthenticated (only `enc` is
+    // covered by the signature verified above), and both branches fail closed regardless -- an
+    // encrypted payload misread as plain fails JSON parsing (ciphertext is not valid JSON), and a
+    // plain payload misread as encrypted fails the AES-GCM authentication tag check.
     byte[] jsonBytes;
     if (certificate.alg.contains("aes-256-gcm")) {
       byte[] key = Hkdf.deriveMachineFileKey(licenseKey, fingerprint);
       jsonBytes = EncryptedPayloadDecryptor.decrypt(payloadBytes, key, "Encrypted machine file");
-    } else if (certificate.alg.contains("base64")) {
-      jsonBytes = payloadBytes;
     } else {
-      throw new TamgaCheckoutException.UnsupportedAlgorithmException(
-          "Unsupported machine file algorithm: '" + certificate.alg + "'.");
+      jsonBytes = payloadBytes;
     }
 
     try {

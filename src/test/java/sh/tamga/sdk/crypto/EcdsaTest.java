@@ -66,13 +66,27 @@ class EcdsaTest {
     assertThat(Ecdsa.verify(new byte[] {1, 2, 3}, message, new byte[] {4, 5, 6})).isFalse();
   }
 
+  /**
+   * SECURITY regression (found by independent review, then independently reconfirmed via a
+   * standalone probe before trusting the finding): a P-384 key signed AND verified with the
+   * literal {@code "SHA384withECDSA"} algorithm is vacuous here -- {@code Signature.verify}
+   * itself already rejects the signature on a plain P-256 {@code KeyFactory} parse mismatch
+   * before {@link Ecdsa}'s explicit curve-parameter guard ever gets a chance to matter, so the
+   * test would still pass even with that guard deleted. Signing AND verifying with {@code
+   * "SHA256withECDSA"} specifically -- matching {@link Ecdsa}'s own hardcoded algorithm name --
+   * is load-bearing: the JCA's ECDSA verifier runs the digest/verify math generically over
+   * whichever curve the key declares, so a P-384 key under {@code "SHA256withECDSA"} verifies
+   * {@code true} with the curve guard removed and {@code false} with it present. That is the only
+   * construction that actually exercises {@link Ecdsa#verify}'s post-parse curve check rather than
+   * a JCA algorithm/key-size mismatch that would fail on its own regardless.
+   */
   @Test
-  void verifyReturnsFalseForGenuinelyDifferentCurvesKeyAndSignature() throws Exception {
+  void verifyReturnsFalseForP384KeyEvenWithMatchingSignatureAlgorithm() throws Exception {
     KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
     generator.initialize(new ECGenParameterSpec("secp384r1"));
     KeyPair p384KeyPair = generator.generateKeyPair();
     byte[] message = "message".getBytes(StandardCharsets.UTF_8);
-    Signature signer = Signature.getInstance("SHA384withECDSA");
+    Signature signer = Signature.getInstance("SHA256withECDSA");
     signer.initSign(p384KeyPair.getPrivate());
     signer.update(message);
     byte[] signature = signer.sign();

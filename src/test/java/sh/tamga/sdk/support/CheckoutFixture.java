@@ -140,6 +140,20 @@ public final class CheckoutFixture {
     return json.getBytes(StandardCharsets.UTF_8);
   }
 
+  /**
+   * A {@code {"data": {...}}} machine-resource payload exercising every field {@code Machine}
+   * models, including timestamps and metadata.
+   */
+  public static byte[] fullMachinePayloadJson(String fingerprint) {
+    String json = "{\"data\":{\"id\":\"mach_123\",\"type\":\"machines\",\"attributes\":{"
+        + "\"fingerprint\":\"" + fingerprint + "\",\"name\":\"build-server-01\","
+        + "\"platform\":\"linux-x86_64\",\"heartbeat_status\":\"ALIVE\","
+        + "\"last_heartbeat_at\":\"2026-08-01T12:00:00.500Z\","
+        + "\"last_check_out_at\":\"2026-07-15T09:30:00Z\","
+        + "\"metadata\":{\"region\":\"eu-west-1\",\"cores\":8,\"gpu\":false}}}}";
+    return json.getBytes(StandardCharsets.UTF_8);
+  }
+
   private static byte[] randomBytes(int length) {
     byte[] bytes = new byte[length];
     RANDOM.nextBytes(bytes);

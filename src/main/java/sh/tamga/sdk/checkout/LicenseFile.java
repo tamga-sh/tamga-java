@@ -63,6 +63,15 @@ public final class LicenseFile {
       throw new TamgaCheckoutException.OfflineFileFormatException(
           "License file certificate JSON is malformed: " + e.getMessage(), e);
     }
+    // SECURITY regression (found by independent review): a well-formed-but-incomplete
+    // certificate (missing enc/sig/alg, or explicit JSON nulls for them) previously reached
+    // certificate.enc.getBytes(...)/Base64.getDecoder().decode(null) unguarded, throwing an
+    // uncaught NullPointerException instead of the documented TamgaCheckoutException -- fail here
+    // instead, with the right exception type, before any downstream code assumes non-null.
+    if (certificate.enc == null || certificate.sig == null || certificate.alg == null) {
+      throw new TamgaCheckoutException.OfflineFileFormatException(
+          "License file certificate is missing a required field (enc, sig, or alg).");
+    }
     return new LicenseFile(certificate);
   }
 

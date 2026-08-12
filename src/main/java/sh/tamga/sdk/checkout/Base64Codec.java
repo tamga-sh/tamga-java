@@ -18,6 +18,15 @@ final class Base64Codec {
   }
 
   static byte[] decodeOrNull(String value) {
+    if (value == null) {
+      // Base64.getDecoder().decode(null) throws NullPointerException, not
+      // IllegalArgumentException -- guard explicitly rather than relying on
+      // callers to pre-validate. Defense in depth: LicenseFile/MachineFile's
+      // own parse() methods also reject a null enc/sig/alg immediately, so
+      // this path is normally unreachable, but a shared utility should not
+      // depend on every future caller getting that right.
+      return null;
+    }
     try {
       return Base64.getDecoder().decode(value);
     } catch (IllegalArgumentException e) {
