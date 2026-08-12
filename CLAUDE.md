@@ -16,9 +16,13 @@ here: [`tamga-api/docs/sdk.md`](https://github.com/tamga-sh/tamga-api/blob/main/
 **Current state: scaffold only.** Gradle build, module layout, CI/release workflow shape, and
 doc-comment stub classes exist. No HTTP transport, no JNI/crypto wiring, no business logic. Do not
 assume any method on `TamgaClient` does anything yet — see the Javadoc at the top of each stub
-class for what it will eventually do. `./gradlew check` currently fails at the JaCoCo coverage
-gate (0% — there is no real code to cover yet); that is expected and will self-resolve once
-Section D onward lands real logic with real tests, not something to "fix" by loosening the gate.
+class for what it will eventually do. `./gradlew check` still fails at the JaCoCo coverage gate
+locally (0% — there is no real code to cover yet); that is expected and will self-resolve once
+Section D onward lands real logic with real tests. **The 80% minimum itself must never be loosened
+to work around this** — CI instead skips the Checkstyle/SpotBugs/`check` steps entirely for
+PRs that touch only `.md` files (see `.github/workflows/ci.yml`'s "Detect doc-only changes" step),
+since a coverage gate has nothing meaningful to say about a diff containing no code. Any PR that
+touches `src/`, `jni/`, or the build config still runs the real gate at the real 80% threshold.
 
 ## Crypto-Boundary Rule (read before touching `internal/jni/`)
 
