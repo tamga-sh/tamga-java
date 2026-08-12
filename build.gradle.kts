@@ -48,8 +48,18 @@ java {
         vendor.set(JvmVendorSpec.ADOPTIUM) // Temurin
     }
 
-    withSourcesJar()
-    withJavadocJar()
+    // Deliberately NOT calling withSourcesJar()/withJavadocJar() here: this repo applies
+    // com.vanniktech.maven.publish's MAIN plugin (not the `.base` variant), which internally
+    // calls configureBasedOnAppliedPlugins() and already wires up its own sources/javadoc jar
+    // tasks (including a task it names `plainJavadocJar`) once it detects the java-library
+    // plugin is applied. Calling withSourcesJar()/withJavadocJar() here too used to create a
+    // second, competing task-creation path for the same artifacts -- Gradle's task-graph
+    // validation correctly flagged this as an undeclared dependency between
+    // generateMetadataFileForMavenPublication and plainJavadocJar (their execution order
+    // wasn't guaranteed), which surfaced as a real publishToMavenCentral failure. Confirmed
+    // against the plugin's own docs: the "equivalent manual Gradle setup" it documents for
+    // JavaLibrary publications IS exactly withSourcesJar()/withJavadocJar() -- i.e. it's an
+    // either/or with the plugin's auto-configuration, not additive.
 }
 
 // Explicit, not left to the platform default: the CI matrix includes
