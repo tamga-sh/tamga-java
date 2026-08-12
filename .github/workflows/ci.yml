@@ -31,7 +31,16 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         java: [17, 21]
     steps:
+      # fetch-depth: 0 (full history) so the doc-only detection below has
+      # every commit it needs for an unambiguous diff against the PR's
+      # actual base commit -- the default shallow (depth 1) checkout
+      # doesn't guarantee that, and left dorny/paths-filter (the first
+      # version of this detection step) computing an inconsistent result
+      # in practice (confirmed: it reported changes outside **/*.md on a
+      # PR whose actual `git diff <base>...<head>` touched only CLAUDE.md).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Docs-only PRs (README/CLAUDE.md/CHANGELOG/etc.) have nothing for
       # Checkstyle/SpotBugs/the JaCoCo coverage gate to meaningfully check --
@@ -45,15 +54,27 @@ jobs:
       # required status checks aren't left permanently pending. Does NOT
       # apply to `push` (post-merge) runs, which always run everything
       # regardless of what changed.
+      #
+      # Hand-rolled rather than a marketplace action: explicit and
+      # verifiable against the exact same `git diff <base>...<head>`
+      # invocation used to sanity-check this locally, no third-party
+      # base-ref-resolution heuristics to second-guess.
       - name: Detect doc-only changes
         if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v3
         id: filter
-        with:
-          filters: |
-            code:
-              - '**'
-              - '!**/*.md'
+        run: |
+          set -eu
+          changed=$(git diff --name-only "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}")
+          echo "Changed files (${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}):"
+          echo "$changed"
+          non_docs=$(echo "$changed" | grep -v -E '\.md$' || true)
+          if [ -z "$non_docs" ]; then
+            echo "This PR touches only .md files -- skipping code verification."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "This PR touches non-doc files -- running full verification."
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Set up JDK ${{ matrix.java }} (Temurin)
         if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
