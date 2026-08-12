@@ -4,9 +4,8 @@
 * @tamga-sh/sdk-maintainers
 
 # Crypto-bearing paths require a security-focused reviewer on every change.
-/src/main/java/sh/tamga/sdk/internal/jni/    @tamga-sh/sdk-maintainers @tamga-sh/security
+/src/main/java/sh/tamga/sdk/crypto/    @tamga-sh/sdk-maintainers @tamga-sh/security
 /src/main/java/sh/tamga/sdk/checkout/    @tamga-sh/sdk-maintainers @tamga-sh/security
 /src/main/java/sh/tamga/sdk/proof/    @tamga-sh/sdk-maintainers @tamga-sh/security
-/jni/    @tamga-sh/sdk-maintainers @tamga-sh/security
 
 /.github/workflows/   @tamga-sh/sdk-maintainers

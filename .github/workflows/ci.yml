@@ -1,16 +1,14 @@
 name: CI
 
 # Static analysis runs as its own step BEFORE `./gradlew check` so a Checkstyle/SpotBugs failure
-# short-circuits the more expensive build/test/coverage steps -- see
-# docs/plans/tamga-java.plan.md §5. Both tasks are also wired as `check` dependencies in
-# build.gradle.kts, so re-running them inside `./gradlew check` is a cheap up-to-date no-op, not
-# duplicated work.
+# short-circuits the more expensive build/test/coverage steps. Both tasks are also wired as `check`
+# dependencies in build.gradle.kts, so re-running them inside `./gradlew check` is a cheap
+# up-to-date no-op, not duplicated work.
 #
-# The 3-OS matrix leg is NOT "run the same Java tests three times" -- the native JNI build
-# (jni/CMakeLists.txt) differs meaningfully per OS (different C toolchain, different shared-library
-# extension: .so/.dylib/.dll), so this exercises three distinct native-build code paths once
-# Section B lands. Today, with no native build wired yet, all three legs run the identical
-# pure-Java path -- that's expected and will diverge once the JNI CMake build is real.
+# The 3-OS matrix leg is still meaningful for a pure-Java codebase, not redundant repetition:
+# NativeLibraryLoader-equivalent concerns are gone (no native library to load per-OS), but
+# `PemEnvelope`/certificate-parsing code touches `Files`/temp-file/line-ending-sensitive paths, and
+# the default platform charset/line separator genuinely differ across ubuntu/macos/windows-latest.
 
 on:
   push:
