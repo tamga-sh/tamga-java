@@ -52,6 +52,18 @@ java {
     withJavadocJar()
 }
 
+// Explicit, not left to the platform default: the CI matrix includes
+// windows-latest, whose default source-file charset is NOT UTF-8 (unlike
+// macOS/Linux) -- without this, a .java file containing literal non-ASCII
+// characters (e.g. CanonicalJsonTest's café/日本語 literals) would compile
+// correctly on macOS/Linux but potentially misread on Windows.
+tasks.withType<JavaCompile> {
+    options.encoding = "UTF-8"
+}
+tasks.withType<Javadoc> {
+    options.encoding = "UTF-8"
+}
+
 repositories {
     mavenCentral()
 }
