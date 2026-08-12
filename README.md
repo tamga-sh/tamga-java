@@ -1,13 +1,15 @@
 # Tamga
 
 Official Java SDK for Tamga. Integrate license activation, offline verification, and machine
-management into your Java and Android applications, built on the
-[tamga-c](https://github.com/tamga-sh/tamga-c) core via JNI.
+management into your Java and Android applications, with cryptographic verification implemented
+natively in Java (JDK built-ins + BouncyCastle for Ed25519 — see `CLAUDE.md`'s "Crypto
+Architecture" section).
 
-> **Status: pre-release scaffold.** This repository currently contains project structure and stub
-> classes only — no business logic, HTTP transport, or cryptographic verification is implemented
-> yet, and it is blocked on `tamga-c`'s ABI freeze (see `CLAUDE.md`). The code snippet below shows
-> the intended API shape and is illustrative, not yet functional.
+> **Status: crypto/checkout/proof are real; HTTP client surface is still stub.** License/machine
+> offline-file verification and offline-proof verification are implemented and tested. The
+> `TamgaClient` HTTP-facing surface (validate/checkout/heartbeat/etc. endpoints) is not yet
+> implemented — see `CLAUDE.md` for the current state. The code snippet below shows the intended
+> API shape and is illustrative, not yet functional for live API calls.
 
 ## Install
 

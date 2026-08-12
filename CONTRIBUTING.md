@@ -1,26 +1,21 @@
 # Contributing to tamga-java
 
-> **Skeleton only.** Full build instructions (JNI native-library prerequisites, `TAMGA_C_LIB_PATH`
-> setup, how to run the pure-Java test suite vs. the native-artifact-gated integration tests) land
-> in `docs/plans/tamga-java.plan.md` Section M, once `tamga-c` publishes its v0.1 release and
-> Section B's native binding layer is real. This file exists now so the section header structure
-> is in place and PRs against this repo have a contribution doc to point to.
-
 ## Status
 
-This repository is currently an infrastructure scaffold (`docs/plans/tamga-java.plan.md`
-Section A). There is no business logic, HTTP transport, or JNI/crypto implementation yet — see
-this repo's [`CLAUDE.md`](CLAUDE.md) for the full picture and the plan file for the task-by-task
-build order.
+Crypto verification (`crypto/`), offline checkout file parsing (`checkout/`), and offline proof
+verification (`proof/`) are implemented and tested. The `TamgaClient` HTTP-facing surface
+(validate/checkout/heartbeat/etc. endpoints, the full `Policy`/`ValidationCode` types) is not yet
+implemented — see this repo's [`CLAUDE.md`](CLAUDE.md) for the full current-state picture.
 
-## Prerequisites (partial — expand once Section B unblocks)
+## Prerequisites
 
-- **JDK**: Temurin 17 (build toolchain) — see `build.gradle.kts`'s `java.toolchain` block.
+- **JDK**: Temurin 17 (build toolchain) — see `build.gradle.kts`'s `java.toolchain` block. The
+  published bytecode target is Java 11 (see `CLAUDE.md`'s "Bytecode target vs. build toolchain"
+  note); you don't need a separate JDK 11 install to build or test this repo.
 - **Gradle**: use the committed wrapper (`./gradlew`), never a locally-installed Gradle — the
   wrapper pins the exact version this repo builds against (`gradle/wrapper/gradle-wrapper.properties`).
 
-The rest — CMake, a C toolchain, a built `tamga-c` cdylib, `TAMGA_C_LIB_PATH` — is deferred until
-Section B is unblocked.
+No native toolchain (CMake, a C compiler) is needed — this repo has no native build step.
 
 ## Build & Test
 
@@ -55,6 +50,6 @@ Publisher Portal rather than legacy OSSRH.
 ## Code Review
 
 `java-reviewer` and `ecc:java-coding-standards` apply to every change. `security-reviewer` is
-**mandatory** (not optional) on any change touching `src/main/java/sh/tamga/sdk/internal/jni/`,
-`src/main/java/sh/tamga/sdk/checkout/`, `src/main/java/sh/tamga/sdk/proof/`, or `jni/` — see
-`docs/plans/tamga-java.plan.md` §4 Quality Gates.
+**mandatory** (not optional) on any change touching `src/main/java/sh/tamga/sdk/crypto/`,
+`src/main/java/sh/tamga/sdk/checkout/`, or `src/main/java/sh/tamga/sdk/proof/` — see
+`.github/CODEOWNERS`.

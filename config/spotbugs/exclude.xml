@@ -2,17 +2,32 @@
 <!--
   SpotBugs exclude filter.
 
-  Intentionally near-empty for now. `sh.tamga.sdk.internal.jni` (the JNI
-  binding layer, docs/plans/tamga-java.plan.md Section B) is the one package
-  where SpotBugs' static analysis is most likely to produce noise that isn't
-  actually wrong (native-call side effects, `System.load` with a
-  dynamically-resolved path), add a narrowly-scoped Match exclusion there
-  if/when a specific rule proves to be a false positive against that
-  package's real design, with a comment explaining WHY it's a false positive.
-  Do not add a blanket package-wide exclusion for `internal.jni` preemptively:
-  that package is exactly where security-reviewer mandates the tightest
-  scrutiny (see CLAUDE.md), and SpotBugs findings there are signal, not noise,
-  until proven otherwise.
+  Intentionally near-empty for now. `sh.tamga.sdk.crypto` (native Ed25519,
+  AES-GCM, HKDF, ECDSA, and RSA verification; see CLAUDE.md's "Crypto
+  Architecture") is the one package where SpotBugs' static analysis is most
+  likely to produce noise that isn't actually wrong: add a narrowly-scoped
+  Match exclusion there if/when a specific rule proves to be a false
+  positive against that package's real design, with a comment explaining
+  WHY it's a false positive. Do not add a blanket package-wide exclusion for
+  `crypto` preemptively: that package is exactly where security-reviewer
+  mandates the tightest scrutiny, and SpotBugs findings there are signal,
+  not noise, until proven otherwise.
 -->
 <FindBugsFilter>
+  <!--
+    TamgaJsonMapper.instance() intentionally returns the shared, module-wide
+    ObjectMapper instance rather than a defensive copy. Jackson's own docs
+    recommend reusing a single configured ObjectMapper: it is thread-safe
+    for concurrent reads once configured, and construction/configuration is
+    comparatively expensive, so copying it on every call would defeat the
+    entire point of sharing it, for a mutation risk this codebase's own
+    call sites never exercise (nothing here calls a mutating method on the
+    returned mapper). A false positive against this specific, deliberate
+    design, not a case to fix.
+  -->
+  <Match>
+    <Class name="sh.tamga.sdk.model.TamgaJsonMapper" />
+    <Method name="instance" />
+    <Bug pattern="MS_EXPOSE_REP" />
+  </Match>
 </FindBugsFilter>

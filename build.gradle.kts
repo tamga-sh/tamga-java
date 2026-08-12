@@ -1,16 +1,13 @@
 // `build.gradle.kts`
 //
-// Single-module build for `sh.tamga:tamga-sdk`. See CLAUDE.md for the full
-// architecture rationale (why JNI lives in `jni/` instead of a Gradle
-// subproject, why bytecode target and build-toolchain versions differ, why
-// the version comes from a git tag instead of a hand-bumped property).
-//
-// STATUS: infrastructure scaffold only (docs/plans/tamga-java.plan.md
-// Section A). Dependencies are declared and quality-gate plugins are wired,
-// but there is no source beyond doc-comment stub files yet — `./gradlew
-// build` compiles an essentially-empty module. Sections B onward (JNI
-// binding, HTTP transport, checkout/proof crypto delegation) are blocked on
-// `tamga-c` publishing a frozen v0.1 ABI; see the plan file's banner.
+// Single-module build for `sh.tamga:tamga-sdk`. Crypto is implemented
+// natively in `crypto/` (JDK built-ins for everything except Ed25519 --
+// BouncyCastle's lightweight API, scoped to exactly that one primitive,
+// since the JDK's own built-in EdDSA support only landed in JDK 15 and this
+// module's bytecode target stays at 11). See CLAUDE.md for the full
+// architecture rationale, why bytecode target and build-toolchain versions
+// differ, and why the version comes from a git tag instead of a hand-bumped
+// property.
 
 plugins {
     `java-library`
@@ -35,11 +32,14 @@ version = gitVersion()
 
 java {
     // Bytecode target stays at Java 11 so consuming applications aren't forced
-    // onto a newer JVM than the SDK itself needs. The BUILD toolchain is pinned
-    // higher (Temurin 17) on purpose — JNI resource packaging and eventual
-    // Android/AGP tooling benefit from a newer build JDK without raising the
-    // floor for consumers. Do not let these two drift into the same value by
-    // "simplifying" — they are deliberately different.
+    // onto a newer JVM than the SDK itself needs (this is also why Ed25519 goes
+    // through BouncyCastle below instead of the JDK's own EdDSA support, which
+    // only landed in JDK 15). The BUILD toolchain is pinned higher (Temurin 17)
+    // on purpose — Checkstyle 13.x's Ant task requires a JDK 21+ *runtime* to
+    // execute regardless of bytecode level it lints (verified locally), and
+    // eventual Android/AGP tooling benefits from a newer build JDK too, without
+    // raising the floor for consumers. Do not let these two drift into the same
+    // value by "simplifying" — they are deliberately different.
     sourceCompatibility = JavaVersion.VERSION_11
     targetCompatibility = JavaVersion.VERSION_11
 
@@ -52,24 +52,52 @@ java {
     withJavadocJar()
 }
 
+// Explicit, not left to the platform default: the CI matrix includes
+// windows-latest, whose default source-file charset is NOT UTF-8 (unlike
+// macOS/Linux) -- without this, a .java file containing literal non-ASCII
+// characters (e.g. CanonicalJsonTest's café/日本語 literals) would compile
+// correctly on macOS/Linux but potentially misread on Windows.
+tasks.withType<JavaCompile> {
+    options.encoding = "UTF-8"
+}
+tasks.withType<Javadoc> {
+    options.encoding = "UTF-8"
+}
+
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    // --- Transport (§C) ---
-    // Hand-rolled HTTP transport on OkHttp. tamga-c is NEVER used for network
-    // I/O — see CLAUDE.md's "Crypto-Boundary Rule".
+    // --- Crypto (crypto/) ---
+    // JDK built-ins cover Ed25519's siblings (AES-256-GCM via javax.crypto,
+    // ECDSA-P256/RSA via java.security, HKDF-SHA256 hand-rolled over
+    // javax.crypto.Mac) -- BouncyCastle is scoped to exactly the one real gap:
+    // the JDK's own EdDSA support requires JDK 15+, but this module's bytecode
+    // target is 11. Used via its lightweight API (Ed25519Signer +
+    // Ed25519PublicKeyParameters) only -- never registered as a JCA Provider,
+    // keeping the dependency's actual surface area narrow and auditable.
+    // "jdk18on" means "JDK 1.8 and onward" (BouncyCastle's own naming
+    // convention for their current general-purpose artifact line) -- covers
+    // this module's Java 11 target.
+    api("org.bouncycastle:bcprov-jdk18on:1.80")
+
+    // --- Transport ---
+    // Hand-rolled HTTP transport on OkHttp.
     api("com.squareup.okhttp3:okhttp:5.4.0")
 
-    // --- JSON (§C/D/H/K/L) ---
+    // --- JSON ---
     // `FAIL_ON_UNKNOWN_PROPERTIES = false` config (forward-compat with server
-    // additions) lands in Transport's ObjectMapper setup in §C, not here.
+    // additions) lives in TamgaJsonMapper, shared by the checkout/proof
+    // offline-decode path and (eventually) TamgaClient's response mapping.
     api("com.fasterxml.jackson.core:jackson-databind:2.22.1")
     // Optional<T> (de)serialization support for model fields that are
     // genuinely absent-vs-null on the wire (see ecc:java-coding-standards on
     // Optional usage — fields, not method params).
     api("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.22.1")
+    // Instant/OffsetDateTime (de)serialization -- jackson-databind alone does
+    // not understand java.time types.
+    api("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.1")
 
     // --- Test (test scope only) ---
     testImplementation("org.junit.jupiter:junit-jupiter:5.14.4")
@@ -121,14 +149,12 @@ checkstyle {
     // level it lints). 12.x is the newest line confirmed to run under JDK 17.
     toolVersion = "12.3.1"
     configFile = file("config/checkstyle/google_checks.xml")
-    // Both source sets checked; JNI's C glue (`jni/`) is intentionally out of
-    // Checkstyle's scope — it's not a Java source set.
     maxWarnings = 0
 }
 
 spotbugs {
     // Default effort/threshold (MAX/MEDIUM) — tighten only if false-positive
-    // noise on the JNI-adjacent `internal.jni` package proves it's warranted.
+    // noise on the crypto-adjacent packages proves it's warranted.
     excludeFilter.set(file("config/spotbugs/exclude.xml"))
 }
 
@@ -160,7 +186,8 @@ mavenPublishing {
         description.set(
             "Official Java SDK for Tamga. Integrate license activation, offline " +
                 "verification, and machine management into your Java and Android " +
-                "applications, built on the tamga-c core via JNI."
+                "applications, with cryptographic verification implemented natively " +
+                "in Java (JDK built-ins + BouncyCastle for Ed25519)."
         )
         url.set("https://github.com/tamga-sh/tamga-java")
 
