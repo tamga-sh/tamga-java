@@ -9,7 +9,7 @@ import java.util.Base64;
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters;
 import org.bouncycastle.crypto.signers.Ed25519Signer;
 import org.junit.jupiter.api.Test;
-import sh.tamga.sdk.crypto.NaiveKey;
+import sh.tamga.sdk.crypto.Hkdf;
 import sh.tamga.sdk.error.TamgaCheckoutException;
 import sh.tamga.sdk.model.License;
 import sh.tamga.sdk.support.CheckoutFixture;
@@ -26,7 +26,7 @@ class LicenseFileTest {
     byte[] json = CheckoutFixture.licensePayloadJson("TEST-LICENSE-KEY");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
 
@@ -39,7 +39,7 @@ class LicenseFileTest {
     byte[] json = CheckoutFixture.fullLicensePayloadJson("TAMGA-FULL-FIELDS");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
     byte[] publicKey = key.generatePublicKey().getEncoded();
@@ -61,7 +61,7 @@ class LicenseFileTest {
     byte[] json = CheckoutFixture.licensePayloadJson("TAMGA-ABC-123");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
     byte[] publicKey = key.generatePublicKey().getEncoded();
@@ -76,11 +76,11 @@ class LicenseFileTest {
   void verifyAndDecryptReturnsLicenseForValidEncryptedFile() {
     Ed25519PrivateKeyParameters signingKey = generateKey();
     String licenseKey = "TAMGA-ENCRYPTED-KEY";
-    byte[] aesKey = NaiveKey.derive(licenseKey);
+    byte[] aesKey = Hkdf.deriveLicenseFileKey(licenseKey);
     byte[] json = CheckoutFixture.licensePayloadJson(licenseKey);
     String enc = CheckoutFixture.encryptedEnc(json, aesKey);
     String sig = CheckoutFixture.ed25519Sign(enc, signingKey);
-    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "aes-256-gcm+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "aes-256-gcm+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
     byte[] publicKey = signingKey.generatePublicKey().getEncoded();
@@ -96,7 +96,7 @@ class LicenseFileTest {
     byte[] json = CheckoutFixture.licensePayloadJson("TEST-LICENSE-KEY");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ed25519Sign(enc, signingKey);
-    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
     byte[] wrongPublicKey = otherKey.generatePublicKey().getEncoded();
@@ -108,11 +108,11 @@ class LicenseFileTest {
   @Test
   void verifyAndDecryptThrowsDecryptionExceptionForWrongLicenseKeyOnEncryptedFile() {
     Ed25519PrivateKeyParameters signingKey = generateKey();
-    byte[] aesKey = NaiveKey.derive("REAL-KEY");
+    byte[] aesKey = Hkdf.deriveLicenseFileKey("REAL-KEY");
     byte[] json = CheckoutFixture.licensePayloadJson("REAL-KEY");
     String enc = CheckoutFixture.encryptedEnc(json, aesKey);
     String sig = CheckoutFixture.ed25519Sign(enc, signingKey);
-    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "aes-256-gcm+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "aes-256-gcm+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
     byte[] publicKey = signingKey.generatePublicKey().getEncoded();
@@ -138,7 +138,7 @@ class LicenseFileTest {
     signer.init(true, key);
     signer.update(json, 0, json.length);
     String sig = Base64.getEncoder().encodeToString(signer.generateSignature());
-    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
 
@@ -151,7 +151,7 @@ class LicenseFileTest {
     byte[] json = CheckoutFixture.licensePayloadJson("TEST-LICENSE-KEY");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapLicensePem(enc + "tampered", sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc + "tampered", sig, "base64+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
 
@@ -165,7 +165,7 @@ class LicenseFileTest {
     byte[] json = CheckoutFixture.licensePayloadJson("TEST-LICENSE-KEY");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ed25519Sign(enc, signingKey);
-    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
 
@@ -175,7 +175,7 @@ class LicenseFileTest {
   @Test
   void verifyReturnsFalseForMalformedBase64Signature() {
     Ed25519PrivateKeyParameters key = generateKey();
-    String pem = CheckoutFixture.wrapLicensePem("AA==", "not valid base64!!!", "base64+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem("AA==", "not valid base64!!!", "base64+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
 
@@ -199,7 +199,7 @@ class LicenseFileTest {
     Ed25519PrivateKeyParameters key = generateKey();
     String enc = "not valid base64!!!";
     String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
     byte[] publicKey = key.generatePublicKey().getEncoded();
@@ -214,7 +214,7 @@ class LicenseFileTest {
     byte[] notResourceJson = "not resource json".getBytes(StandardCharsets.UTF_8);
     String enc = Base64.getEncoder().encodeToString(notResourceJson);
     String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "base64+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
     byte[] publicKey = key.generatePublicKey().getEncoded();
@@ -228,7 +228,7 @@ class LicenseFileTest {
     Ed25519PrivateKeyParameters key = generateKey();
     String enc = Base64.getEncoder().encodeToString(new byte[] {1, 2, 3});
     String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "aes-256-gcm+ed25519");
+    String pem = CheckoutFixture.wrapLicensePem(enc, sig, "aes-256-gcm+ed25519+v2");
 
     LicenseFile file = LicenseFile.parse(pem);
     byte[] publicKey = key.generatePublicKey().getEncoded();
@@ -280,5 +280,79 @@ class LicenseFileTest {
 
     assertThatThrownBy(() -> LicenseFile.parse(pem))
         .isInstanceOf(TamgaCheckoutException.OfflineFileFormatException.class);
+  }
+
+  // ── Format v2: expiry inside the signature ─────────────────────────────────
+
+  private static final long EXP = 1_767_229_200L;
+
+  @Test
+  void anExpiredFileIsRefusedEvenThoughItsSignatureIsValid() {
+    // The whole point of v2. In v1 the requested TTL lived only in the JSON:API envelope around
+    // the certificate, so a 24-hour trial file stayed cryptographically valid forever and the
+    // client -- which is the attacker -- simply kept the PEM.
+    Ed25519PrivateKeyParameters key = generateKey();
+    byte[] json = CheckoutFixture.licensePayloadJson("K", EXP);
+    String enc = CheckoutFixture.plainEnc(json);
+    String pem = CheckoutFixture.wrapLicensePem(
+        enc, CheckoutFixture.ed25519Sign(enc, key), "base64+ed25519+v2");
+
+    LicenseFile file = LicenseFile.parse(pem);
+    byte[] publicKey = key.generatePublicKey().getEncoded();
+
+    assertThatThrownBy(() -> file.verifyWithClaims(publicKey, "K", EXP + 3600))
+        .isInstanceOf(TamgaCheckoutException.LicenseFileExpiredException.class);
+  }
+
+  @Test
+  void aFileWithinItsTtlVerifiesAndExposesItsClaims() {
+    Ed25519PrivateKeyParameters key = generateKey();
+    byte[] json = CheckoutFixture.licensePayloadJson("K", EXP);
+    String enc = CheckoutFixture.plainEnc(json);
+    String pem = CheckoutFixture.wrapLicensePem(
+        enc, CheckoutFixture.ed25519Sign(enc, key), "base64+ed25519+v2");
+
+    License.LicenseWithClaims result = LicenseFile.parse(pem)
+        .verifyWithClaims(key.generatePublicKey().getEncoded(), "K", EXP - 3600);
+
+    assertThat(result.claims().expiresAt()).isEqualTo(EXP);
+    assertThat(result.claims().id()).isEqualTo("test-jti");
+    assertThat(result.claims().keyId()).isEqualTo("test-kid");
+  }
+
+  @Test
+  void aFileWithoutAnExpClaimNeverExpires() {
+    // Checkout without a `ttl` produces no `exp`. That must read as perpetual, not as "expired at
+    // the epoch".
+    Ed25519PrivateKeyParameters key = generateKey();
+    byte[] json = CheckoutFixture.licensePayloadJson("K");
+    String enc = CheckoutFixture.plainEnc(json);
+    String pem = CheckoutFixture.wrapLicensePem(
+        enc, CheckoutFixture.ed25519Sign(enc, key), "base64+ed25519+v2");
+
+    License.LicenseWithClaims result = LicenseFile.parse(pem)
+        .verifyWithClaims(key.generatePublicKey().getEncoded(), "K", Long.MAX_VALUE / 2);
+
+    assertThat(result.claims().expiresAt()).isNull();
+  }
+
+  @Test
+  void aV1PayloadWithoutMetaIsRefused() {
+    // Second line behind the alg gate: a file must not reach the expiry check with nothing to
+    // check.
+    Ed25519PrivateKeyParameters key = generateKey();
+    byte[] v1 = ("{\"data\":{\"id\":\"lic_123\",\"type\":\"licenses\","
+        + "\"attributes\":{\"key\":\"K\",\"suspended\":false,\"uses\":0}}}")
+        .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    String enc = CheckoutFixture.plainEnc(v1);
+    String pem = CheckoutFixture.wrapLicensePem(
+        enc, CheckoutFixture.ed25519Sign(enc, key), "base64+ed25519+v2");
+
+    LicenseFile file = LicenseFile.parse(pem);
+    byte[] publicKey = key.generatePublicKey().getEncoded();
+
+    assertThatThrownBy(() -> file.verifyAndDecrypt(publicKey, "K"))
+        .isInstanceOf(TamgaCheckoutException.OfflineFileFormatException.class)
+        .hasMessageContaining("pre-v2");
   }
 }

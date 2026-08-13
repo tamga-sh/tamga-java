@@ -75,6 +75,30 @@ public class TamgaCheckoutException extends RuntimeException {
   }
 
   /**
+   * The file's signature verified, but its signed {@code exp} claim has passed -- an authentic
+   * license file that has simply run out.
+   *
+   * <p>Its own type on purpose: a caller that cannot tell "expired" from "forged" either warns the
+   * user about tampering when their trial merely ended, or treats a forgery as a renewal prompt.
+   */
+  public static final class LicenseFileExpiredException extends TamgaCheckoutException {
+    private static final long serialVersionUID = 1L;
+
+    private final long expiresAt;
+
+    /** Constructs an exception for a file that expired at {@code expiresAt} (Unix seconds). */
+    public LicenseFileExpiredException(long expiresAt) {
+      super("License file expired at unix timestamp " + expiresAt + ".");
+      this.expiresAt = expiresAt;
+    }
+
+    /** The {@code exp} claim, seconds since the Unix epoch. */
+    public long expiresAt() {
+      return expiresAt;
+    }
+  }
+
+  /**
    * {@code RSA_2048_JWT_RS256} (or any other scheme never implemented for a given file type) was
    * requested explicitly.
    */

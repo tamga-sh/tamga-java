@@ -27,6 +27,21 @@ public final class Hkdf {
 
   private static final int MACHINE_FILE_KEY_LENGTH = 32;
 
+  /**
+   * CRITICAL: load-bearing literals, same as the machine-file salt above.
+   *
+   * <p>Before file format v2 the license-file key was not derived at all -- it was the license
+   * key's raw UTF-8 bytes zero-padded to 32, which meant an attacker holding a stolen {@code .lic}
+   * was attacking the license key's own entropy rather than a 256-bit key space. The
+   * {@code NaiveKey} class that implemented it has been removed rather than deprecated: leaving it
+   * public would let a caller silently keep using the weaker derivation.
+   */
+  private static final byte[] LICENSE_FILE_KEY_SALT =
+      "tamga:license-file-key-v1".getBytes(StandardCharsets.UTF_8);
+
+  private static final byte[] LICENSE_FILE_KEY_INFO =
+      "license-file".getBytes(StandardCharsets.UTF_8);
+
   private Hkdf() {
   }
 
@@ -39,6 +54,19 @@ public final class Hkdf {
     byte[] inputKeyingMaterial = licenseKey.getBytes(StandardCharsets.UTF_8);
     byte[] info = fingerprint.getBytes(StandardCharsets.UTF_8);
     return derive(inputKeyingMaterial, MACHINE_FILE_KEY_SALT, info, MACHINE_FILE_KEY_LENGTH);
+  }
+
+  /**
+   * Derives the license-file AES-256-GCM key: HKDF-SHA256 with {@code ikm} = the license key's raw
+   * UTF-8 bytes, {@code salt} = {@code "tamga:license-file-key-v1"}, {@code info} =
+   * {@code "license-file"}, 32-byte output.
+   *
+   * <p>No fingerprint is involved -- a license file is not bound to a machine.
+   */
+  public static byte[] deriveLicenseFileKey(String licenseKey) {
+    byte[] inputKeyingMaterial = licenseKey.getBytes(StandardCharsets.UTF_8);
+    return derive(
+        inputKeyingMaterial, LICENSE_FILE_KEY_SALT, LICENSE_FILE_KEY_INFO, MACHINE_FILE_KEY_LENGTH);
   }
 
   /**
