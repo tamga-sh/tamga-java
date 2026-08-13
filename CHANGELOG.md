@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/tamga-sh/tamga-java/compare/v1.0.1...v1.1.0) (2026-08-13)
+
+
+### Features
+
+* license-file HKDF + offline format v2 ([9014cf6](https://github.com/tamga-sh/tamga-java/commit/9014cf62a0490a54e66bac1ef7757253aeedbf53))
+
+
+### Bug Fixes
+
+* auto-release Maven Central deployments instead of leaving them pending ([bfcb93f](https://github.com/tamga-sh/tamga-java/commit/bfcb93f0820e99dad95c96727488f09dc200bf83))
+
 ## [1.0.1](https://github.com/tamga-sh/tamga-java/compare/v1.0.0...v1.0.1) (2026-08-12)
 
 
