@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/tamga-sh/tamga-java/compare/v1.1.1...v1.2.0) (2026-08-13)
+
+
+### Bug Fixes
+
+* strip leading v from the published Maven Central version string ([76f4169](https://github.com/tamga-sh/tamga-java/commit/76f41690d9807a0c15151924f77f639a8c9c2ccc))
+
+
+### Miscellaneous Chores
+
+* set explicit release version ([165a6b2](https://github.com/tamga-sh/tamga-java/commit/165a6b23dee26e0401bb21fabe367069c683eee9))
+
 ## [1.1.1](https://github.com/tamga-sh/tamga-java/compare/v1.1.0...v1.1.1) (2026-08-13)
 
 
