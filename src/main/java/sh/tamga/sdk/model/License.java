@@ -112,6 +112,50 @@ public final class License {
     return fromResource(payload.data());
   }
 
+  /**
+   * As {@link #parseResourcePayload(byte[])}, also returning the claims that were signed alongside
+   * the resource.
+   *
+   * @throws IOException if the payload is malformed, or carries no {@code meta} claims -- i.e. it
+   *     is a pre-v2 file. That is the second line of defence behind the {@code alg} gate: a file
+   *     must not reach the expiry check with nothing to check.
+   */
+  public static LicenseWithClaims parseResourcePayloadWithClaims(byte[] json) throws IOException {
+    JsonApiPayload<Attributes> payload =
+        TamgaJsonMapper.instance().readValue(json, new TypeReference<JsonApiPayload<Attributes>>() {
+        });
+    if (payload == null) {
+      throw new IOException("License resource payload is empty.");
+    }
+    if (payload.meta() == null) {
+      throw new IOException(
+          "License file payload is missing the signed 'meta' claims (this looks like a pre-v2"
+              + " file).");
+    }
+    return new LicenseWithClaims(fromResource(payload.data()), payload.meta());
+  }
+
+  /** A license plus the claims that were covered by its file's signature. */
+  public static final class LicenseWithClaims {
+    private final License license;
+    private final LicenseFileClaims claims;
+
+    LicenseWithClaims(License license, LicenseFileClaims claims) {
+      this.license = license;
+      this.claims = claims;
+    }
+
+    /** The license the file describes. */
+    public License license() {
+      return license;
+    }
+
+    /** The signed {@code iat}/{@code exp}/{@code jti}/{@code kid}. */
+    public LicenseFileClaims claims() {
+      return claims;
+    }
+  }
+
   private static License fromResource(JsonApiResource<Attributes> resource) throws IOException {
     if (resource == null) {
       throw new IOException("License resource payload is missing its data object.");

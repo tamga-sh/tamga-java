@@ -3,7 +3,7 @@ package sh.tamga.sdk.checkout;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import sh.tamga.sdk.crypto.Ed25519;
-import sh.tamga.sdk.crypto.NaiveKey;
+import sh.tamga.sdk.crypto.Hkdf;
 import sh.tamga.sdk.error.TamgaCheckoutException;
 import sh.tamga.sdk.model.License;
 import sh.tamga.sdk.model.TamgaJsonMapper;
@@ -18,7 +18,10 @@ import sh.tamga.sdk.model.TamgaJsonMapper;
  * -----END LICENSE FILE-----
  * </pre>
  *
- * <p>{@code alg} is exactly {@code "base64+ed25519"} (plain) or {@code "aes-256-gcm+ed25519"}
+ * <p>The {@code +v2} suffix is load-bearing: a v1 file carried no expiry inside its signature, so
+ * accepting one would hand back the permanent-file problem v2 exists to close.
+ *
+ * <p>{@code alg} is exactly {@code "base64+ed25519+v2"} (plain) or {@code "aes-256-gcm+ed25519+v2"}
  * (encrypted) -- Ed25519 ONLY for the checkout signature, independent of the license's own {@code
  * scheme} (contrast with {@link MachineFile}, which dispatches by scheme).
  *
@@ -39,8 +42,17 @@ public final class LicenseFile {
 
   private static final String BEGIN_MARKER = "-----BEGIN LICENSE FILE-----";
   private static final String END_MARKER = "-----END LICENSE FILE-----";
-  private static final String ALG_PLAIN = "base64+ed25519";
-  private static final String ALG_ENCRYPTED = "aes-256-gcm+ed25519";
+  private static final String ALG_PLAIN = "base64+ed25519+v2";
+  private static final String ALG_ENCRYPTED = "aes-256-gcm+ed25519+v2";
+
+  /**
+   * How much clock skew is tolerated when checking {@code exp}.
+   *
+   * <p>Deliberately small. The client's clock is under the attacker's control, so a generous
+   * allowance is just a free extension on every expired file; this covers ordinary NTP drift and
+   * nothing more.
+   */
+  private static final long CLOCK_SKEW_TOLERANCE_SECONDS = 60L;
 
   private final LicenseFileCertificate certificate;
 
@@ -109,11 +121,26 @@ public final class LicenseFile {
    * alg} indicates AES-256-GCM) or plain-decodes the {@code enc} payload, and parses the embedded
    * {@code {"data": <LicenseResource>}} JSON into a {@link License}.
    *
-   * @param licenseKey used to derive the AES-256-GCM key (via {@code NaiveKey}) for an encrypted
+   * @param licenseKey used to derive the AES-256-GCM key (via {@code Hkdf}) for an encrypted
    *     file. Ignored for a plain (unencrypted) file, but still required for a uniform call shape
    *     across both cases.
    */
   public License verifyAndDecrypt(byte[] publicKey, String licenseKey) {
+    return verifyWithClaims(publicKey, licenseKey, System.currentTimeMillis() / 1000L).license();
+  }
+
+  /**
+   * As {@link #verifyAndDecrypt(byte[], String)}, also returning the signed claims and taking the
+   * current time from the caller.
+   *
+   * <p>Two uses for {@code nowUnixSeconds}. Tests get determinism. And an application that keeps a
+   * server-supplied timestamp -- the recommended defence against a user winding the system clock
+   * back to revive an expired file -- can pass that instead of trusting the local clock.
+   *
+   * <p>Expiry is enforced either way; it is not opt-in.
+   */
+  public License.LicenseWithClaims verifyWithClaims(
+      byte[] publicKey, String licenseKey, long nowUnixSeconds) {
     if (!verify(publicKey)) {
       throw new TamgaCheckoutException.SignatureVerificationException();
     }
@@ -123,7 +150,7 @@ public final class LicenseFile {
 
     byte[] jsonBytes;
     if (ALG_ENCRYPTED.equals(certificate.alg)) {
-      byte[] key = NaiveKey.derive(licenseKey);
+      byte[] key = Hkdf.deriveLicenseFileKey(licenseKey);
       jsonBytes = EncryptedPayloadDecryptor.decrypt(payloadBytes, key, "Encrypted license file");
     } else if (ALG_PLAIN.equals(certificate.alg)) {
       jsonBytes = payloadBytes;
@@ -134,11 +161,21 @@ public final class LicenseFile {
           "Unsupported license file algorithm: '" + certificate.alg + "'.");
     }
 
+    License.LicenseWithClaims result;
     try {
-      return License.parseResourcePayload(jsonBytes);
+      result = License.parseResourcePayloadWithClaims(jsonBytes);
     } catch (IOException e) {
       throw new TamgaCheckoutException.OfflineFileFormatException(
           "License file payload JSON is malformed: " + e.getMessage(), e);
     }
+
+    // The signature proves the file is authentic. It does not prove it is still valid -- that is
+    // this check, and skipping it is what made v1 files permanent.
+    Long exp = result.claims().expiresAt();
+    if (exp != null && nowUnixSeconds - CLOCK_SKEW_TOLERANCE_SECONDS > exp) {
+      throw new TamgaCheckoutException.LicenseFileExpiredException(exp);
+    }
+
+    return result;
   }
 }

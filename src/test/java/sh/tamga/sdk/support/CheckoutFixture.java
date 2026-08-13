@@ -114,8 +114,22 @@ public final class CheckoutFixture {
 
   /** A minimal, valid {@code {"data": {...}}} license-resource JSON payload. */
   public static byte[] licensePayloadJson(String key) {
+    return licensePayloadJson(key, null);
+  }
+
+  /**
+   * As {@link #licensePayloadJson(String)}, with an {@code exp} claim.
+   *
+   * <p>Format v2 puts the claims inside the signed bytes; a payload without them is a v1 file and
+   * no longer verifies. {@code exp} is omitted when {@code null}, matching a checkout made without
+   * a {@code ttl}.
+   */
+  public static byte[] licensePayloadJson(String key, Long exp) {
+    String expField = exp == null ? "" : ",\"exp\":" + exp;
     String json = "{\"data\":{\"id\":\"lic_123\",\"type\":\"licenses\",\"attributes\":{"
-        + "\"key\":\"" + key + "\",\"suspended\":false,\"uses\":0}}}";
+        + "\"key\":\"" + key + "\",\"suspended\":false,\"uses\":0}},"
+        + "\"meta\":{\"iat\":1767225600,\"jti\":\"test-jti\","
+        + "\"kid\":\"test-kid\"" + expField + "}}";
     return json.getBytes(StandardCharsets.UTF_8);
   }
 
@@ -129,7 +143,8 @@ public final class CheckoutFixture {
         + "\"expiry\":\"2027-01-01T00:00:00Z\","
         + "\"last_validated_at\":\"2026-08-01T12:00:00.500Z\","
         + "\"last_check_in_at\":\"2026-07-15T09:30:00Z\","
-        + "\"metadata\":{\"seats\":5,\"tier\":\"pro\",\"trial\":false,\"note\":null}}}}";
+        + "\"metadata\":{\"seats\":5,\"tier\":\"pro\",\"trial\":false,\"note\":null}}},"
+        + "\"meta\":{\"iat\":1767225600,\"jti\":\"test-jti\",\"kid\":\"test-kid\"}}";
     return json.getBytes(StandardCharsets.UTF_8);
   }
 
