@@ -178,15 +178,26 @@ tasks.withType<com.github.spotbugs.snom.SpotBugsTask>().configureEach {
 }
 
 // --- Publishing (§N) ---
-// `publishToMavenCentral()` (no argument) targets the Central Publisher Portal
+// `publishToMavenCentral(...)` targets the Central Publisher Portal
 // (central.sonatype.com) by default in vanniktech/gradle-maven-publish-plugin
 // 0.31+ — the plugin dropped the legacy-OSSRH-vs-Portal `SonatypeHost` choice
 // once the legacy OSSRH hosts were fully sunset. Do not reintroduce a
 // `SonatypeHost` argument; it no longer exists on this plugin version. See
-// CLAUDE.md "Release & Versioning". Actual `release: published` → publish
-// wiring lives in .github/workflows/release.yml.
+// CLAUDE.md "Release & Versioning". Actual release-please -> publish wiring
+// lives in .github/workflows/release.yml.
+//
+// `automaticRelease = true`: without this, the plugin's default
+// (`automaticRelease = false`) uploads a deployment to the Portal that then
+// sits waiting for a human to log in and click "Publish" -- confirmed the
+// hard way on the real v1.0.1 release, which uploaded successfully
+// ("Uploaded bundle to Central Portal as USER_MANAGED") but did not actually
+// reach Maven Central until manually published from the Portal UI. Since the
+// whole point of chaining `publish` off release-please's own outputs
+// (release.yml) is a fully unattended release pipeline, every release after
+// v1.0.1 should auto-publish once Sonatype's server-side validation passes,
+// with no manual Portal step.
 mavenPublishing {
-    publishToMavenCentral()
+    publishToMavenCentral(automaticRelease = true)
     signAllPublications()
 
     coordinates(group.toString(), "tamga-sdk", version.toString())
