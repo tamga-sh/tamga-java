@@ -27,8 +27,18 @@ group = "sh.tamga"
 // this repo's CLAUDE.md "Release & Versioning" section. `gitVersion()` returns
 // `"unspecified"` in a shallow/tag-less checkout (e.g. this scaffold, pre-v0.1),
 // which is fine for local `./gradlew build` but must never be what gets published.
+//
+// `gitVersion()` mimics `git describe --tags`, which returns the tag string
+// verbatim -- it does NOT strip a leading "v" on its own, and the plugin's own
+// `prefix` parameter is for multi-character component prefixes (e.g.
+// "my-product@"), not a bare "v" (confirmed against the plugin's own valid-prefix
+// regex, which requires a letter/digit run followed by a separator -- "v" alone
+// doesn't qualify). Maven/Gradle coordinates must be a plain "1.1.1", not "v1.1.1"
+// -- found the hard way when v1.1.1 published to Maven Central as literally
+// "v1.1.1", which no standard `sh.tamga:tamga-sdk:1.1.1` dependency declaration
+// resolves. Strip the prefix explicitly instead of relying on the plugin to.
 val gitVersion: groovy.lang.Closure<String> by extra
-version = gitVersion()
+version = gitVersion().toString().removePrefix("v")
 
 java {
     // Bytecode target stays at Java 11 so consuming applications aren't forced
