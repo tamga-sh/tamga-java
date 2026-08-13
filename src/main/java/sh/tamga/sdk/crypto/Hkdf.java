@@ -9,9 +9,10 @@ import javax.crypto.spec.SecretKeySpec;
  * HKDF-SHA256 (RFC 5869), hand-rolled over {@code javax.crypto.Mac("HmacSHA256")} -- the JDK has
  * no standard HKDF API at this module's Java 11 baseline.
  *
- * <p>Used only by machine-file checkout to derive the AES-256-GCM key -- see {@link NaiveKey} for
- * license-file checkout's deliberately different, non-KDF derivation. The two are never
- * interchangeable.
+ * <p>Used by both license-file and machine-file checkout to derive the AES-256-GCM key, with
+ * different, non-interchangeable salt/info parameters per format -- license-file checkout no
+ * longer uses a non-KDF derivation (that was the pre-v2 design; the old NaiveKey class is
+ * removed).
  */
 public final class Hkdf {
 

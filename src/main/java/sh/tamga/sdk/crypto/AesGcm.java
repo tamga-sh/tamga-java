@@ -8,9 +8,9 @@ import javax.crypto.spec.SecretKeySpec;
 
 /**
  * AES-256-GCM open/seal over the JDK's built-in {@code javax.crypto.Cipher} ("AES/GCM/NoPadding",
- * available since JDK 8) -- algorithm only, never derives the key itself. See {@link NaiveKey}
- * (license checkout) and {@link Hkdf} (machine checkout) for the two distinct, non-interchangeable
- * key-derivation paths that feed this class.
+ * available since JDK 8) -- algorithm only, never derives the key itself. See {@link Hkdf} for the
+ * two distinct, non-interchangeable key-derivation paths (license checkout vs. machine checkout)
+ * that feed this class -- same HKDF-SHA256 primitive, different salt/info per format.
  */
 public final class AesGcm {
 
