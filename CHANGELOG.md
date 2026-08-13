@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/tamga-sh/tamga-java/compare/v1.1.0...v1.1.1) (2026-08-13)
+
+
+### Bug Fixes
+
+* broken NaiveKey javadoc references blocking Maven Central publish ([4cf6923](https://github.com/tamga-sh/tamga-java/commit/4cf69236e31b3302da895c6d1ad96b9d61e63eeb))
+
 ## [1.1.0](https://github.com/tamga-sh/tamga-java/compare/v1.0.1...v1.1.0) (2026-08-13)
 
 
