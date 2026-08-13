@@ -128,7 +128,8 @@ public final class CheckoutFixture {
     String expField = exp == null ? "" : ",\"exp\":" + exp;
     String json = "{\"data\":{\"id\":\"lic_123\",\"type\":\"licenses\",\"attributes\":{"
         + "\"key\":\"" + key + "\",\"suspended\":false,\"uses\":0}},"
-        + "\"meta\":{\"iat\":1767225600,\"jti\":\"test-jti\",\"kid\":\"test-kid\"" + expField + "}}";
+        + "\"meta\":{\"iat\":1767225600,\"jti\":\"test-jti\","
+        + "\"kid\":\"test-kid\"" + expField + "}}";
     return json.getBytes(StandardCharsets.UTF_8);
   }
 

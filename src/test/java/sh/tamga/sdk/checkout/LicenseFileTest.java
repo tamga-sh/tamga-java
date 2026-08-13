@@ -305,7 +305,7 @@ class LicenseFileTest {
   }
 
   @Test
-  void aFileWithinItsTtlVerifiesAndExposesItsClaims() {
+  void fileWithinTtlVerifiesAndExposesClaims() {
     Ed25519PrivateKeyParameters key = generateKey();
     byte[] json = CheckoutFixture.licensePayloadJson("K", EXP);
     String enc = CheckoutFixture.plainEnc(json);
@@ -321,7 +321,7 @@ class LicenseFileTest {
   }
 
   @Test
-  void aFileWithoutAnExpClaimNeverExpires() {
+  void fileWithoutExpClaimNeverExpires() {
     // Checkout without a `ttl` produces no `exp`. That must read as perpetual, not as "expired at
     // the epoch".
     Ed25519PrivateKeyParameters key = generateKey();
@@ -337,7 +337,7 @@ class LicenseFileTest {
   }
 
   @Test
-  void aV1PayloadWithoutMetaIsRefused() {
+  void v1PayloadWithoutMetaIsRefused() {
     // Second line behind the alg gate: a file must not reach the expiry check with nothing to
     // check.
     Ed25519PrivateKeyParameters key = generateKey();
