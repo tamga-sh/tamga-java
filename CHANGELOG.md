@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/tamga-sh/tamga-java/compare/v1.0.0...v1.0.1) (2026-08-12)
+
+
+### Bug Fixes
+
+* chain Maven Central publish off release-please's own outputs ([4fda5c9](https://github.com/tamga-sh/tamga-java/commit/4fda5c9d5a3800be0759f6f4ee455f3a52206e96))
+* remove redundant withSourcesJar/withJavadocJar causing publish failure ([4569ca3](https://github.com/tamga-sh/tamga-java/commit/4569ca3b1afa017490f0115a57af64aa8b7fdb63))
+
 ## 1.0.0 (2026-08-12)
 
 
