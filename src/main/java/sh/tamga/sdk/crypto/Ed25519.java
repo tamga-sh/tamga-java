@@ -12,9 +12,8 @@ import org.bouncycastle.crypto.signers.Ed25519Signer;
  * KeyFactory} with algorithm name {@code "Ed25519"}) only landed in JDK 15 (JEP 339), but this
  * module's bytecode target stays at Java 11 so consuming applications aren't forced onto a newer
  * JVM -- see {@code build.gradle.kts}. Every other primitive in this package uses a JDK built-in;
- * this is the one genuine gap, matching tamga-dotnet's own precedent for the identical problem (its
- * BCL likewise lacks Ed25519, and it adds exactly one minimal third-party dependency,
- * NSec.Cryptography, scoped to just that primitive).
+ * this is the one genuine gap, and the dependency is scoped to just this primitive rather than
+ * registered platform-wide.
  */
 public final class Ed25519 {
 

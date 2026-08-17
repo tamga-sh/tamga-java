@@ -19,7 +19,9 @@ import sh.tamga.sdk.model.TamgaJsonMapper;
  * </pre>
  *
  * <p>The {@code +v2} suffix is load-bearing: a v1 file carried no expiry inside its signature, so
- * accepting one would hand back the permanent-file problem v2 exists to close.
+ * accepting one would hand back the permanent-file problem v2 exists to close. <b>v1 files are
+ * rejected outright and there is no fallback path</b> -- a caller holding a pre-v2 {@code .lic}
+ * must re-issue it.
  *
  * <p>{@code alg} is exactly {@code "base64+ed25519+v2"} (plain) or {@code "aes-256-gcm+ed25519+v2"}
  * (encrypted) -- Ed25519 ONLY for the checkout signature, independent of the license's own {@code
@@ -33,10 +35,14 @@ import sh.tamga.sdk.model.TamgaJsonMapper;
  *
  * <p>GOTCHA: {@code includes} is always {@code []} server-side -- this SDK does not model an
  * "embedded relationships via checkout" feature. GOTCHA: checkout {@code id} is a fresh UUIDv7 per
- * call, not idempotent. GOTCHA: {@code ttl}/{@code expiry} (returned alongside the certificate by
- * the JSON:API checkout response, not carried inside the file itself) are metadata-only, NOT
- * embedded in the signed payload and NOT re-checked server-side on later validation -- expiry
- * enforcement for an offline file is entirely this SDK's client-side responsibility.
+ * call, not idempotent.
+ *
+ * <p>Expiry: as of format v2 the {@code exp} claim IS carried inside the signed payload, alongside
+ * {@code iat}/{@code jti}/{@code kid} (see {@link sh.tamga.sdk.model.LicenseFileClaims}), and
+ * {@link #verifyWithClaims} enforces it with a 60-second clock-skew tolerance. The {@code
+ * ttl}/{@code expiry} echoed back in the JSON:API checkout envelope remain metadata-only -- they
+ * are not signed, so never enforce against those. Enforcement is still entirely client-side: the
+ * server does not re-check an offline file's expiry on later validation.
  */
 public final class LicenseFile {
 

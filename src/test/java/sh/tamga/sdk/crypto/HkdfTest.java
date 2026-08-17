@@ -40,14 +40,13 @@ class HkdfTest {
 
   @Test
   void theTwoDerivationsNeverCollide() {
-    // GOTCHA regression: both are HKDF-SHA256 now, so the only thing keeping them apart is the
-    // salt and info -- a change that accidentally aligned those would silently let one file type
-    // decrypt as the other. Historically machine-file (HKDF) and license-file (zero-pad)
-    // derivations must never produce the same key for the same license key.
-    byte[] hkdfKey = Hkdf.deriveMachineFileKey("SAME-LICENSE-KEY", "fp");
-    byte[] naiveKey = Hkdf.deriveLicenseFileKey("SAME-LICENSE-KEY");
+    // GOTCHA regression: both formats use HKDF-SHA256, so the only thing keeping them apart is
+    // the salt and info -- a change that accidentally aligned those would silently let one file
+    // type decrypt as the other. The two must never produce the same key for the same license key.
+    byte[] machineFileKey = Hkdf.deriveMachineFileKey("SAME-LICENSE-KEY", "fp");
+    byte[] licenseFileKey = Hkdf.deriveLicenseFileKey("SAME-LICENSE-KEY");
 
-    assertThat(hkdfKey).isNotEqualTo(naiveKey);
+    assertThat(machineFileKey).isNotEqualTo(licenseFileKey);
   }
 
   @Test

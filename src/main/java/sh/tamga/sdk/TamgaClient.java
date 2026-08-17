@@ -3,10 +3,11 @@ package sh.tamga.sdk;
 /**
  * {@code TamgaClient.java}
  *
- * <p><b>STUB -- scaffolding only.</b> No business logic is implemented yet; this file exists so
- * the module layout is syntactically valid and the eventual public API surface has a home. See
- * {@code docs/plans/tamga-java.plan.md} Section C onward for the full task breakdown this class
- * will eventually satisfy.
+ * <p><b>STUB -- scaffolding only.</b> This class has no methods and no business logic; it exists
+ * so the module layout is syntactically valid and the eventual public API surface has a home. Do
+ * not write code against it. Offline verification is fully implemented elsewhere and does not go
+ * through this class -- see {@link sh.tamga.sdk.checkout.LicenseFile}, {@link
+ * sh.tamga.sdk.checkout.MachineFile} and {@link sh.tamga.sdk.proof.OfflineProof}.
  *
  * <p>Intended contents once implemented (do not build networking/crypto here directly -- see this
  * repository's {@code CLAUDE.md} "Crypto Architecture" section; delegate HTTP transport to {@link
@@ -36,9 +37,9 @@ package sh.tamga.sdk;
  *       </ul>
  * </ul>
  *
- * <p>Every method must always send {@code Authorization: License <key>} (the primary transport
- * for this embedded SDK) even though no auth is currently enforced server-side on the validation
- * endpoints -- see {@code docs/sdk.md}'s "Known Server-Side Gaps" item 3.
+ * <p>Every method must always send {@code Authorization: License <key>} -- the primary auth
+ * transport for this embedded SDK. Send it unconditionally rather than only where the server is
+ * observed to check it.
  */
 public final class TamgaClient {
 

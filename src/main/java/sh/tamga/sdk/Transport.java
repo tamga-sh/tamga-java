@@ -38,16 +38,21 @@ package sh.tamga.sdk;
  *   <li>A Jackson {@code ObjectMapper} configured with {@code FAIL_ON_UNKNOWN_PROPERTIES = false}
  *       (forward-compat with server additions) and {@code JavaTimeModule} registered for
  *       timestamp fields.
- *   <li>Retry policy limited to network-level failures (connection reset, timeout) -- explicitly
- *       NO retry/backoff wired for HTTP 429 (see below).
+ *   <li>Retry policy covering network-level failures (connection reset, timeout) AND HTTP 429 --
+ *       see below.
+ *   <li>HTTP 429 handling, matching the rest of the Tamga SDK fleet: parse {@code Retry-After} and
+ *       cap it, jittered exponential backoff, and auto-retry scoped to {@code GET} plus exactly
+ *       five safe {@code POST} actions ({@code validate}, {@code validate-key}, {@code check-in},
+ *       {@code check-out}, {@code ping}). Resource creation is deliberately excluded from
+ *       auto-retry -- a retried create is a duplicate resource, not a slower success.
  * </ul>
  *
- * <p>Explicitly NOT implemented (doc-only, matching {@code docs/sdk.md}'s "Known Server-Side
- * Gaps"): the {@code Tamga-Environment} request header (planned EE feature, no server code path
- * reads it yet), and {@code X-RateLimit-*} response header parsing / 429 retry-backoff ({@code
- * TOO_MANY_REQUESTS} is declared in the server's error enum but has no constructor and is never
- * returned by any code path today -- client-side retry-after handling would be untestable dead
- * code). Do not "fix" this later against a server that doesn't send it.
+ * <p>The server does return 429. Earlier revisions of this file claimed it never would and told
+ * contributors not to implement backoff; that was wrong and the instruction has been removed.
+ *
+ * <p>Still explicitly NOT planned (doc-only, matching {@code docs/sdk.md}'s "Known Server-Side
+ * Gaps"): the {@code Tamga-Environment} request header -- a planned EE feature with no server code
+ * path reading it yet.
  */
 public final class Transport {
 
