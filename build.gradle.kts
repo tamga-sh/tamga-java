@@ -214,11 +214,16 @@ mavenPublishing {
 
     pom {
         name.set("tamga-sdk")
+        // Fleet-wide wording, identical across every official Tamga SDK -- keep it in sync with
+        // README.md's one-line description rather than re-describing this SDK's internals here.
+        //
+        // No keyword/tag field is set because a Maven POM has none: unlike crates.io, npm or
+        // NuGet, Maven Central has no keywords element, so the canonical SDK keyword set
+        // (licensing, software-licensing, license-key, activation, entitlements) has nowhere to
+        // live in this manifest. Do not invent a `properties` entry for it; nothing consumes one.
         description.set(
             "Official Java SDK for Tamga. Integrate license activation, offline " +
-                "verification, and machine management into your Java and Android " +
-                "applications, with cryptographic verification implemented natively " +
-                "in Java (JDK built-ins + BouncyCastle for Ed25519)."
+                "verification, and machine management into your Java applications."
         )
         url.set("https://github.com/tamga-sh/tamga-java")
 
