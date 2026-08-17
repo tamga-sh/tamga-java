@@ -27,7 +27,7 @@ import sh.tamga.sdk.model.CanonicalJson;
  * {@code {"account":{"id":...},"machine":{"id":...,"fingerprint":...},"dataset":...}} in literal
  * source-code order is WRONG. The server builds this payload via {@code serde_json::json!(...)},
  * whose backing {@code serde_json::Map} is {@code BTreeMap}-backed (the {@code preserve_order}/
- * {@code indexmap} Cargo feature is enabled on neither {@code tamga-api} nor {@code tamga-rust}),
+ * {@code indexmap} Cargo feature is enabled on neither of the Tamga server implementations),
  * so the actual wire bytes are recursively alphabetically key-sorted at every nesting level, not
  * literal source order: {@code {"account":{"id":...},"dataset":{...sorted...},"machine":{
  * "fingerprint":...,"id":...}}} -- note {@code dataset} sorts before {@code machine}, and inside

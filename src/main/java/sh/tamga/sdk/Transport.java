@@ -50,14 +50,13 @@ package sh.tamga.sdk;
  * <p>The server does return 429. Earlier revisions of this file claimed it never would and told
  * contributors not to implement backoff; that was wrong and the instruction has been removed.
  *
- * <p>Still explicitly NOT planned (doc-only, matching {@code docs/sdk.md}'s "Known Server-Side
- * Gaps"): the {@code Tamga-Environment} request header -- a planned EE feature with no server code
- * path reading it yet.
+ * <p>Still explicitly NOT planned (doc-only, matching the Tamga API protocol specification's
+ * "Known Server-Side Gaps"): the {@code Tamga-Environment} request header -- a planned EE feature
+ * with no server code path reading it yet.
  */
 public final class Transport {
 
   private Transport() {
-    // Intentionally empty. Implementation deferred to a future session per
-    // docs/plans/tamga-java.plan.md Section C.
+    // Intentionally empty. Implementation deferred to a future session.
   }
 }

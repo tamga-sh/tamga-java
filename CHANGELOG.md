@@ -45,7 +45,7 @@
 ### Features
 
 * pivot from tamga-c JNI binding to native Java crypto reimplementation ([9fe1ff4](https://github.com/tamga-sh/tamga-java/commit/9fe1ff41706e4f010a826b9990970c61161ece4a))
-* scaffold project structure (Section A) ([29ccb1d](https://github.com/tamga-sh/tamga-java/commit/29ccb1d145b957eea083ce24141cc4c4bf71e981))
+* scaffold project structure ([29ccb1d](https://github.com/tamga-sh/tamga-java/commit/29ccb1d145b957eea083ce24141cc4c4bf71e981))
 
 
 ### Bug Fixes

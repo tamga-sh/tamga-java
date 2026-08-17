@@ -23,9 +23,9 @@ group = "sh.tamga"
 
 // No hand-bumped version property anywhere in this repo. `com.palantir.git-version`
 // derives it from the nearest git tag (`git tag v0.2.0` + a build IS the entire
-// "bump the version" operation) — see docs/plans/tamga-java.plan.md Section N and
-// this repo's CLAUDE.md "Release & Versioning" section. `gitVersion()` returns
-// `"unspecified"` in a shallow/tag-less checkout (e.g. this scaffold, pre-v0.1),
+// "bump the version" operation) — see this repo's CLAUDE.md "Branch & Commit
+// Convention" section. `gitVersion()` returns `"unspecified"` in a
+// shallow/tag-less checkout (e.g. this scaffold, pre-v0.1),
 // which is fine for local `./gradlew build` but must never be what gets published.
 //
 // `gitVersion()` mimics `git describe --tags`, which returns the tag string
@@ -141,8 +141,8 @@ tasks.jacocoTestReport {
 }
 
 jacoco {
-    // Matches the CI-enforced gate documented in docs/plans/tamga-java.plan.md
-    // §4/§5 and this repo's CLAUDE.md "Testing" section.
+    // Matches the CI-enforced gate documented in this repo's CLAUDE.md "Testing"
+    // section.
     toolVersion = "0.8.12"
 }
 
@@ -187,14 +187,14 @@ tasks.withType<com.github.spotbugs.snom.SpotBugsTask>().configureEach {
     }
 }
 
-// --- Publishing (§N) ---
+// --- Publishing ---
 // `publishToMavenCentral(...)` targets the Central Publisher Portal
 // (central.sonatype.com) by default in vanniktech/gradle-maven-publish-plugin
 // 0.31+ — the plugin dropped the legacy-OSSRH-vs-Portal `SonatypeHost` choice
 // once the legacy OSSRH hosts were fully sunset. Do not reintroduce a
 // `SonatypeHost` argument; it no longer exists on this plugin version. See
-// CLAUDE.md "Release & Versioning". Actual release-please -> publish wiring
-// lives in .github/workflows/release.yml.
+// CLAUDE.md "Branch & Commit Convention". Actual release-please -> publish
+// wiring lives in .github/workflows/release.yml.
 //
 // `automaticRelease = true`: without this, the plugin's default
 // (`automaticRelease = false`) uploads a deployment to the Portal that then

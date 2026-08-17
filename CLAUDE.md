@@ -8,12 +8,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 activation, offline license/machine verification, and machine/component/process management for
 Java and (eventually) Android applications. Cryptographic verification is implemented natively in
 Java — see "Crypto Architecture" below for why, and how this differs from the JNI-binding design
-this repo started with. Full task breakdown and (now largely historical) build status:
-[`../docs/plans/tamga-java.plan.md`](../docs/plans/tamga-java.plan.md) (lives one directory up, in
-the sibling `tamga-sdk` monorepo, not inside this repo — see that file's own superseding banner).
-The protocol/feature spec this SDK is built against — every field name, endpoint, and enum value
-comes from it — lives in the private `tamga-api` repository (`docs/sdk.md`) and is referenced
-throughout this file as `docs/sdk.md`. It is not linkable from public documentation.
+this repo started with. The protocol/feature spec this SDK is built against — every field name,
+endpoint, and enum value comes from it — is the Tamga API protocol specification, referenced
+throughout this file by that name. It is maintained privately and is not linkable from public
+documentation.
 
 **Current state: crypto/checkout/proof are real; HTTP client surface is still stub.**
 `crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA PKCS1/PSS),
@@ -113,12 +111,12 @@ consumers depend on.
 ./gradlew jacocoTestReport                # HTML/XML coverage report without the gate
 ```
 
-There is no `just`-style task runner in this repo (unlike `tamga-api`) — the Gradle wrapper
-(`./gradlew`, never a locally-installed `gradle`) is the whole toolchain. Always use the wrapper:
+There is no `just`-style task runner in this repo — the Gradle wrapper (`./gradlew`, never a
+locally-installed `gradle`) is the whole toolchain. Always use the wrapper:
 it pins the exact Gradle version (`gradle/wrapper/gradle-wrapper.properties`) this repo builds
 against, and that pin matters — see "Gradle/Checkstyle version coupling" below.
 
-## GOTCHAS — from `docs/sdk.md`'s "Known Server-Side Gaps"
+## GOTCHAS — from the Tamga API protocol specification's "Known Server-Side Gaps"
 
 These are real, verified discrepancies between what the server *appears* to support and what it
 actually does. Building this SDK's UX around the wrong side of any of these will either silently

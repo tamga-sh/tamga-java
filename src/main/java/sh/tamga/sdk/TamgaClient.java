@@ -17,10 +17,12 @@ package sh.tamga.sdk;
  * <ul>
  *   <li>A {@code Builder} requiring {@code accountId} (String) and {@code baseUrl}/{@code host};
  *       construction fails fast ({@code IllegalStateException}) if either is missing -- matches
- *       {@code docs/sdk.md}'s "no mode where the account segment can be omitted".
+ *       the Tamga API protocol specification's "no mode where the account segment can be
+ *       omitted".
  *   <li>Base URL assembly: {@code https://<host>/v1/accounts/{account_id}/...}, with defensive
  *       URL-encoding of {@code account_id}.
- *   <li>One method per server endpoint documented in {@code docs/sdk.md}, grouped by resource:
+ *   <li>One method per server endpoint documented in the Tamga API protocol specification,
+ *       grouped by resource:
  *       <ul>
  *         <li>License validation: {@code validateByKey}, {@code validateById}, {@code
  *             quickValidate} (§D)
@@ -44,7 +46,6 @@ package sh.tamga.sdk;
 public final class TamgaClient {
 
   private TamgaClient() {
-    // Intentionally empty. Implementation deferred to a future session per
-    // docs/plans/tamga-java.plan.md Sections C-L.
+    // Intentionally empty. Implementation deferred to a future session.
   }
 }

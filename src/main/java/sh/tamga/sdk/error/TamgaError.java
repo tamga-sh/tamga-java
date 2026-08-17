@@ -40,7 +40,6 @@ package sh.tamga.sdk.error;
 public final class TamgaError {
 
   private TamgaError() {
-    // Intentionally empty. Implementation deferred to a future session per
-    // docs/plans/tamga-java.plan.md Section L.
+    // Intentionally empty. Implementation deferred to a future session.
   }
 }

@@ -5,8 +5,8 @@ package sh.tamga.sdk.model;
  *
  * <p><b>STUB -- scaffolding only.</b> No implementation yet.
  *
- * <p>Intended contents once implemented: the policy-derived behavior reference from {@code
- * docs/sdk.md} §10 -- {@code overageStrategy}, {@code heartbeatCullStrategy}, {@code
+ * <p>Intended contents once implemented: the policy-derived behavior reference from the Tamga API
+ * protocol specification §10 -- {@code overageStrategy}, {@code heartbeatCullStrategy}, {@code
  * heartbeatResurrectionStrategy}, {@code checkInInterval}, {@code requireCheckIn} (boolean),
  * {@code maxMachines}/{@code maxCores}/{@code maxProcesses} (integers), plus the free-text
  * strategy fields ({@code expirationStrategy}, {@code renewalBasis}, {@code
@@ -22,12 +22,11 @@ package sh.tamga.sdk.model;
  * {@code "DENY_ACCESS"} and {@code heartbeat_resurrection_strategy} to {@code "NO_RESURRECTION"} --
  * neither is a real enum variant. The deserializers for those two fields must fall back
  * leniently (to {@code NO_OVERAGE}/{@code NO_REVIVE} semantics respectively) rather than throwing.
- * See {@code docs/sdk.md}'s "Known Server-Side Gaps" item 9.
+ * See the Tamga API protocol specification's "Known Server-Side Gaps" item 9.
  */
 public final class Policy {
 
   private Policy() {
-    // Intentionally empty. Implementation deferred to a future session per
-    // docs/plans/tamga-java.plan.md Section L.
+    // Intentionally empty. Implementation deferred to a future session.
   }
 }
