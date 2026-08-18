@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/tamga-sh/tamga-java/compare/v1.2.0...v1.2.1) (2026-08-18)
+
+
+### Bug Fixes
+
+* correct SDK documentation and align package metadata ([14e94d5](https://github.com/tamga-sh/tamga-java/commit/14e94d578cc6b159ded2436308a8c8aa1d04b1d7))
+
 ## [1.2.0](https://github.com/tamga-sh/tamga-java/compare/v1.1.1...v1.2.0) (2026-08-13)
 
 
