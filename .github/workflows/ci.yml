@@ -23,6 +23,7 @@ jobs:
   build:
     name: ${{ matrix.os }} / Temurin ${{ matrix.java }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -37,6 +38,7 @@ jobs:
       # in practice (confirmed: it reported changes outside **/*.md on a
       # PR whose actual `git diff <base>...<head>` touched only CLAUDE.md).
       - uses: actions/checkout@v4
+        timeout-minutes: 10
         with:
           fetch-depth: 0
 
@@ -78,6 +80,7 @@ jobs:
       - name: Set up JDK ${{ matrix.java }} (Temurin)
         if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         uses: actions/setup-java@v4
+        timeout-minutes: 10
         with:
           distribution: temurin
           java-version: ${{ matrix.java }}
@@ -85,6 +88,7 @@ jobs:
       - name: Set up Gradle
         if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
         uses: gradle/actions/setup-gradle@v4
+        timeout-minutes: 10
 
       - name: Checkstyle (Google Java Style)
         if: github.event_name != 'pull_request' || steps.filter.outputs.code == 'true'
@@ -104,6 +108,7 @@ jobs:
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.java == 17 && (github.event_name != 'pull_request' || steps.filter.outputs.code == 'true')
         uses: codecov/codecov-action@v4
+        timeout-minutes: 10
         with:
           files: build/reports/jacoco/test/jacocoTestReport.xml
           fail_ci_if_error: false
