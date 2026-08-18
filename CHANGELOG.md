@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/tamga-sh/tamga-java/compare/v1.2.1...v1.2.2) (2026-08-18)
+
+
+### Bug Fixes
+
+* **ci:** open release PRs with a GitHub App token so required checks run ([#26](https://github.com/tamga-sh/tamga-java/issues/26)) ([b57b322](https://github.com/tamga-sh/tamga-java/commit/b57b322cdd307971f733c9a4039c31674092484a))
+
 ## [1.2.1](https://github.com/tamga-sh/tamga-java/compare/v1.2.0...v1.2.1) (2026-08-18)
 
 
