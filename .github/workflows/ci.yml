@@ -107,7 +107,7 @@ jobs:
       # since it's the lower bound of the supported JDK matrix.
       - name: Upload coverage to Codecov
         if: matrix.os == 'ubuntu-latest' && matrix.java == 17 && (github.event_name != 'pull_request' || steps.filter.outputs.code == 'true')
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         timeout-minutes: 10
         with:
           files: build/reports/jacoco/test/jacocoTestReport.xml
