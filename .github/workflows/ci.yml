@@ -37,7 +37,7 @@ jobs:
       # version of this detection step) computing an inconsistent result
       # in practice (confirmed: it reported changes outside **/*.md on a
       # PR whose actual `git diff <base>...<head>` touched only CLAUDE.md).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         timeout-minutes: 10
         with:
           fetch-depth: 0
