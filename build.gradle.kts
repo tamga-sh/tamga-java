@@ -14,7 +14,7 @@ plugins {
     checkstyle
     jacoco
     id("com.github.spotbugs") version "6.5.10"
-    id("com.palantir.git-version") version "0.11.0"
+    id("com.palantir.git-version") version "5.0.0"
     id("com.vanniktech.maven.publish") version "0.37.0"
     signing
 }
