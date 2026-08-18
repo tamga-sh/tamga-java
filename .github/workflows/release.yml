@@ -72,6 +72,7 @@ jobs:
     name: release-please
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
@@ -98,8 +99,10 @@ jobs:
       always() &&
       (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        timeout-minutes: 10
         with:
           # Pin explicitly to the tag being published -- release-please's own tag_name output for
           # the push-triggered path, or the manually-supplied input for a workflow_dispatch retry.
@@ -110,12 +113,14 @@ jobs:
 
       - name: Set up JDK 17 (Temurin)
         uses: actions/setup-java@v4
+        timeout-minutes: 10
         with:
           distribution: temurin
           java-version: "17"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        timeout-minutes: 10
 
       - name: Publish to the Central Publisher Portal
         run: ./gradlew publishToMavenCentral --no-configuration-cache --no-daemon
