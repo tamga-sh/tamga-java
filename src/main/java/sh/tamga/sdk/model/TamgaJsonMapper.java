@@ -11,8 +11,8 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
  * {@code camelCase} Java fields, ISO-8601 timestamps via {@link java.time.Instant}, and forward
  * compatibility with server-added fields ({@code FAIL_ON_UNKNOWN_PROPERTIES} disabled). Used by
  * both the offline checkout/proof file parsers and (eventually) {@code TamgaClient}'s response
- * mapping, so both paths decode identically -- see {@code Checkout/LicenseFile.java}/{@code
- * Checkout/MachineFile.java}.
+ * mapping, so both paths decode identically -- see {@link sh.tamga.sdk.checkout.LicenseFile} and
+ * {@link sh.tamga.sdk.checkout.MachineFile}.
  */
 public final class TamgaJsonMapper {
 

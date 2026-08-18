@@ -8,8 +8,8 @@ public enum LicenseScheme {
   /** No scheme configured -- legacy plain key string, unsigned. */
   NONE(""),
   /**
-   * Wire value {@code ED25519_SIGN}. Also the sole scheme used for license checkout ({@code
-   * Checkout/LicenseFile.java}), independent of this field.
+   * Wire value {@code ED25519_SIGN}. Also the sole scheme used for license checkout ({@link
+   * sh.tamga.sdk.checkout.LicenseFile}), independent of this field.
    */
   ED25519_SIGN("ED25519_SIGN"),
   /** Wire value {@code RSA_2048_PKCS1_SIGN}. */

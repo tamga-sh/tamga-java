@@ -30,11 +30,14 @@ import sh.tamga.sdk.model.TamgaJsonMapper;
  * {@link TamgaCheckoutException.SchemeNotSupportedException} immediately rather than silently
  * no-op-ing.
  *
- * <p>Encryption key derivation is HKDF-SHA256 ({@code Hkdf}) -- NOT the naive zero-pad/truncate
- * scheme used by license checkout ({@code NaiveKey}). Decryption requires BOTH the license key AND
- * the target machine's fingerprint. GOTCHA: {@code ttl} is server-validated {@code > 0 && <=
- * 31536000} (365 days) -- the SDK's checkout call validates this client-side too, to fail fast, in
- * addition to handling the server's {@code 422 TTL_INVALID}.
+ * <p>Encryption key derivation is HKDF-SHA256 ({@link sh.tamga.sdk.crypto.Hkdf}), the same
+ * primitive license checkout uses -- but with different, non-interchangeable parameters: salt
+ * {@code "tamga:machine-file-key-v1"} and {@code info} = the machine fingerprint here, versus salt
+ * {@code "tamga:license-file-key-v1"} and {@code info} = {@code "license-file"} there. Decryption
+ * therefore requires BOTH the license key AND the target machine's fingerprint. GOTCHA: {@code
+ * ttl} is server-validated {@code > 0 && <= 31536000} (365 days) -- {@link #validateTtl} mirrors
+ * that bound client-side so a checkout request can fail fast instead of round-tripping to a
+ * {@code 422 TTL_INVALID}.
  *
  * <p>RSA and ECDSA public keys are expected in X.509 {@code SubjectPublicKeyInfo} DER encoding;
  * Ed25519 public keys are raw 32-byte keys, matching {@link LicenseFile}.

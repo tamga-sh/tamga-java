@@ -30,18 +30,16 @@ package sh.tamga.sdk.error;
  *   <li>A fallback to the generic {@code TamgaApiException} for any unmapped {@code code}.
  * </ul>
  *
- * <p>Explicitly NOT modeled as a retryable/backoff case: {@code 429 TOO_MANY_REQUESTS} is declared
- * in the server's error enum but has no constructor and is never returned by any code path today
- * (see {@code docs/sdk.md}'s "Known Server-Side Gaps"). Do not build client-side 429/backoff
- * handling expecting the server to ever send it under the current deployment.
- *
- * <p>Distinct from {@code sh.tamga.sdk.error.TamgaNativeException} (not yet scaffolded -- lands
- * with §B), which is for JNI/native-layer failures, not HTTP/API errors.
+ * <p>{@code 429 TOO_MANY_REQUESTS} must be modeled as a retryable case: the server does return it.
+ * An earlier revision of this comment claimed otherwise and told contributors not to build
+ * client-side backoff -- that was wrong, and the instruction has been removed. The retry mechanics
+ * (capped {@code Retry-After}, jittered exponential backoff, auto-retry scoped to {@code GET} plus
+ * five safe {@code POST} actions) belong in {@link sh.tamga.sdk.Transport}; this package only owns
+ * the typed exception the caller sees when retries are exhausted.
  */
 public final class TamgaError {
 
   private TamgaError() {
-    // Intentionally empty. Implementation deferred to a future session per
-    // docs/plans/tamga-java.plan.md Section L.
+    // Intentionally empty. Implementation deferred to a future session.
   }
 }

@@ -22,8 +22,9 @@ final class LicenseFileCertificate {
   final String sig;
 
   /**
-   * Algorithm identifier -- exactly {@code "base64+ed25519"} (plain) or {@code
-   * "aes-256-gcm+ed25519"} (encrypted).
+   * Algorithm identifier -- exactly {@code "base64+ed25519+v2"} (plain) or {@code
+   * "aes-256-gcm+ed25519+v2"} (encrypted). The {@code +v2} suffix is required: {@link
+   * LicenseFile#verify} rejects anything else, which is what closes the door on pre-v2 files.
    */
   final String alg;
 

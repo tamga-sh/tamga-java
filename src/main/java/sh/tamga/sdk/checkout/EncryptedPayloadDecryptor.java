@@ -6,9 +6,9 @@ import sh.tamga.sdk.error.TamgaCheckoutException;
 
 /**
  * Shared {@code nonce || ciphertext || tag} slicing + AES-256-GCM open logic for {@link
- * LicenseFile} and {@link MachineFile} -- the two types are identical here except for which KDF
- * derives {@code key} ({@code NaiveKey} vs. {@code Hkdf}, see each type's own remarks), so that key
- * is the only thing callers supply.
+ * LicenseFile} and {@link MachineFile}. Both derive {@code key} with HKDF-SHA256 ({@link
+ * sh.tamga.sdk.crypto.Hkdf}); they differ only in the salt/{@code info} they pass it (see each
+ * type's own remarks), so the derived key is the only thing callers supply here.
  */
 final class EncryptedPayloadDecryptor {
 

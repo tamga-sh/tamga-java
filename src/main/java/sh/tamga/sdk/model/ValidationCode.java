@@ -6,9 +6,9 @@ package sh.tamga.sdk.model;
  * <p><b>STUB -- scaffolding only.</b> No implementation yet.
  *
  * <p>Intended contents once implemented: an enum modeling all 24 wire values of {@code meta.code}
- * from {@code docs/sdk.md} §2, in the server's exact priority-evaluation order, with a Jackson
- * {@code @JsonEnumDefaultValue}-annotated {@code UNKNOWN} fallback member so any future
- * server-added code deserializes leniently instead of throwing:
+ * from the Tamga API protocol specification §2, in the server's exact priority-evaluation order,
+ * with a Jackson {@code @JsonEnumDefaultValue}-annotated {@code UNKNOWN} fallback member so any
+ * future server-added code deserializes leniently instead of throwing:
  *
  * <pre>
  * VALID, SUSPENDED, EXPIRED, OVERDUE, PRODUCT_SCOPE_MISMATCH, POLICY_SCOPE_MISMATCH,
@@ -21,7 +21,8 @@ package sh.tamga.sdk.model;
  *
  * <p>Only 14 of the 24 values are actually reachable against the server today. Model all 24 for
  * forward-compatibility, but doc-comment the unreachable ones so callers don't build UX assuming
- * they'll ever see them (see {@code docs/sdk.md}'s "Known Server-Side Gaps" item 4):
+ * they'll ever see them (see the Tamga API protocol specification's "Known Server-Side Gaps"
+ * item 4):
  *
  * <ul>
  *   <li><b>Reachable today (✅):</b> {@code VALID} through {@code TOO_MANY_USES} (14 values).
@@ -34,6 +35,5 @@ package sh.tamga.sdk.model;
  * </ul>
  */
 public enum ValidationCode {
-  // Intentionally empty. Implementation deferred to a future session per
-  // docs/plans/tamga-java.plan.md Section D.
+  // Intentionally empty. Implementation deferred to a future session.
 }

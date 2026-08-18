@@ -8,15 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 activation, offline license/machine verification, and machine/component/process management for
 Java and (eventually) Android applications. Cryptographic verification is implemented natively in
 Java — see "Crypto Architecture" below for why, and how this differs from the JNI-binding design
-this repo started with. Full task breakdown and (now largely historical) build status:
-[`../docs/plans/tamga-java.plan.md`](../docs/plans/tamga-java.plan.md) (lives one directory up, in
-the sibling `tamga-sdk` monorepo, not inside this repo — see that file's own superseding banner).
-Protocol/feature spec this SDK is built against — every field name, endpoint, and enum value comes
-from here: [`tamga-api/docs/sdk.md`](https://github.com/tamga-sh/tamga-api/blob/main/docs/sdk.md).
+this repo started with. The protocol/feature spec this SDK is built against — every field name,
+endpoint, and enum value comes from it — is the Tamga API protocol specification, referenced
+throughout this file by that name. It is maintained privately and is not linkable from public
+documentation.
 
 **Current state: crypto/checkout/proof are real; HTTP client surface is still stub.**
-`Sources/.../crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA PKCS1/PSS, the naive
-license-key derivation), `checkout/` (`LicenseFile`, `MachineFile`), and `proof/` (`OfflineProof` +
+`crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA PKCS1/PSS),
+`checkout/` (`LicenseFile`, `MachineFile`), and `proof/` (`OfflineProof` +
 `CanonicalJson`) are implemented and tested (118 tests, 96%+ instruction coverage). The
 HTTP-facing surface (`TamgaClient`'s endpoint methods, `Transport.java`, the full JSON:API error
 model, entitlement caching, heartbeat scheduling, the full `Policy`/`ValidationCode` types) is
@@ -30,8 +29,8 @@ Every cryptographic operation is implemented natively in Java, in `sh.tamga.sdk.
 1. Ed25519 verify (license checkout signature check) — BouncyCastle's lightweight API
    (`Ed25519Signer`/`Ed25519PublicKeyParameters`), not registered as a JCA `Provider`.
 2. AES-256-GCM open/seal (license/machine file decrypt) — `javax.crypto.Cipher`, JDK built-in.
-3. HKDF-SHA256 derive (machine file decrypt key derivation) — hand-rolled RFC 5869 over
-   `javax.crypto.Mac`, JDK built-in.
+3. HKDF-SHA256 derive (BOTH license-file and machine-file decrypt key derivation, with different
+   salt/`info` per format) — hand-rolled RFC 5869 over `javax.crypto.Mac`, JDK built-in.
 4. ECDSA-P256 verify and RSA PKCS1/PSS verify (machine checkout + offline proof) —
    `java.security.Signature`/`KeyFactory`, JDK built-in.
 
@@ -88,7 +87,7 @@ tamga-java/
 │   │       ├── model/                      # License, Machine, LicenseScheme, HeartbeatStatus,
 │   │       │                               #   CanonicalJson, TamgaJsonMapper, ValidationCode
 │   │       │                               #   (ValidationCode/Policy still stub)
-│   │       ├── crypto/                     # Ed25519, AesGcm, Hkdf, Ecdsa, Rsa, NaiveKey
+│   │       ├── crypto/                     # Ed25519, AesGcm, Hkdf, Ecdsa, Rsa
 │   │       ├── checkout/                   # LicenseFile, MachineFile — PEM parse/verify/decrypt
 │   │       ├── proof/                      # OfflineProof — RSA-2048 PKCS#1v1.5, exact-order payload
 │   │       └── error/                      # TamgaCheckoutException (real) + TamgaError (still stub)
@@ -104,7 +103,7 @@ consumers depend on.
 ## Dev Commands
 
 ```bash
-./gradlew build              # compile + package (sources jar + javadoc jar via withSourcesJar/withJavadocJar)
+./gradlew build              # compile + package (sources/javadoc jars come from the publish plugin, NOT withSourcesJar/withJavadocJar — see build.gradle.kts)
 ./gradlew test                # JUnit 5 only, no coverage gate
 ./gradlew check               # checkstyleMain/Test + spotbugsMain/Test + test + jacocoTestCoverageVerification (80% gate)
 ./gradlew checkstyleMain checkstyleTest   # lint only
@@ -112,12 +111,12 @@ consumers depend on.
 ./gradlew jacocoTestReport                # HTML/XML coverage report without the gate
 ```
 
-There is no `just`-style task runner in this repo (unlike `tamga-api`) — the Gradle wrapper
-(`./gradlew`, never a locally-installed `gradle`) is the whole toolchain. Always use the wrapper:
+There is no `just`-style task runner in this repo — the Gradle wrapper (`./gradlew`, never a
+locally-installed `gradle`) is the whole toolchain. Always use the wrapper:
 it pins the exact Gradle version (`gradle/wrapper/gradle-wrapper.properties`) this repo builds
 against, and that pin matters — see "Gradle/Checkstyle version coupling" below.
 
-## GOTCHAS — from `docs/sdk.md`'s "Known Server-Side Gaps"
+## GOTCHAS — from the Tamga API protocol specification's "Known Server-Side Gaps"
 
 These are real, verified discrepancies between what the server *appears* to support and what it
 actually does. Building this SDK's UX around the wrong side of any of these will either silently
@@ -141,9 +140,12 @@ source doc for the full set, including analytics/EE items that don't touch this 
   `ValidationScope`'s `entitlements`/`fingerprint`/`version`/`checksum` fields — build the request
   field, don't advertise it as a functioning constraint. (Still stub — deferred with the rest of
   the HTTP-facing surface.)
-- **No client-side 429/backoff handling.** `429 TOO_MANY_REQUESTS` is declared in the server's
-  error enum but has no constructor and is never returned by any code path today. Do not add
-  retry/backoff logic that waits for a 429 that will never come.
+- **HTTP 429 is live and must be handled once `Transport` exists.** The server returns it, and the
+  rest of the SDK fleet already ships the handling: parsed and capped `Retry-After`, jittered
+  exponential backoff, auto-retry scoped to `GET` plus the five safe `POST` actions (`validate`,
+  `validate-key`, `check-in`, `check-out`, `ping`), with resource creation deliberately excluded.
+  This SDK ships none of it yet only because it has no HTTP transport at all — implementing
+  `Transport.java` means implementing this too.
 - **`Tamga-Environment` request header does nothing server-side.** It's a planned EE feature with
   no request-parsing code path yet. Don't expose a client-facing "environment" option that implies
   it's honored today.
@@ -158,11 +160,18 @@ source doc for the full set, including analytics/EE items that don't touch this 
   600s regardless of `policy.heartbeat_duration`; process heartbeat window is a hardcoded 30s with
   no resurrection grace period at all. Any heartbeat-scheduler helper should derive its ping
   interval from these hardcoded constants, not from a policy value the server ignores.
-- **License checkout's AES key derivation is NOT a KDF.** It's the raw UTF-8 bytes of the license
-  key, zero-padded or truncated to exactly 32 bytes (`crypto.NaiveKey`). Running it through
-  SHA-256 or any real KDF produces a key that silently fails to decrypt. Machine checkout, by
-  contrast, *does* use a real HKDF-SHA256 (`crypto.Hkdf`) — the two are never interchangeable, see
-  `LicenseFile` vs. `MachineFile` Javadoc, and `HkdfTest`'s explicit regression for this.
+- **Both checkout formats derive their AES key with HKDF-SHA256** (`crypto.Hkdf`), with different,
+  non-interchangeable parameters: license files use salt `tamga:license-file-key-v1` / `info`
+  `license-file` (`Hkdf.deriveLicenseFileKey`); machine files use salt
+  `tamga:machine-file-key-v1` / `info` = the machine fingerprint (`Hkdf.deriveMachineFileKey`).
+  The pre-v2 license-file transform (raw license-key bytes zero-padded/truncated to 32) is
+  **removed, not deprecated** — its class is gone, so no caller can reach it. See `HkdfTest`'s
+  explicit regression that the two derivations never collide.
+- **Offline license files must be format v2.** `alg` must be exactly `base64+ed25519+v2` or
+  `aes-256-gcm+ed25519+v2`; the signed payload must carry `meta` claims (`iat`/`exp`/`jti`/`kid`);
+  `exp` is enforced with a 60s clock-skew tolerance. v1 files are rejected outright with no
+  fallback path — a real behavioral break for callers holding v1-issued `.lic` files. See
+  `LicenseFile.verifyWithClaims`, `License.parseResourcePayloadWithClaims`, and `LicenseFileClaims`.
 - **The license-checkout Ed25519 signature covers the base64 *string bytes* of `enc`, not its
   decoded bytes.** This is the single most common implementation bug across every Tamga SDK. See
   the `CRITICAL:` note in `checkout/LicenseFile.java`'s Javadoc and the call site in `verify`, and
