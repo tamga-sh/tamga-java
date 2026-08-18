@@ -112,7 +112,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up JDK 17 (Temurin)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         timeout-minutes: 10
         with:
           distribution: temurin
