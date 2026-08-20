@@ -4,6 +4,17 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # JUnit 6 requires a JVM runtime of 17 or newer, while this SDK still
+      # targets Java 11 (build.gradle.kts sourceCompatibility/targetCompatibility).
+      # Gradle selects variants by target bytecode level, so junit-jupiter 6.x
+      # cannot even be resolved here -- the bump fails at :compileTestJava on
+      # every platform, before a single test runs. Taking it would mean dropping
+      # Java 11 support, which is a breaking change for consumers and a product
+      # decision rather than a dependency update. JUnit 5 remains supported.
+      # Remove this entry when the SDK's minimum Java version is raised.
+      - dependency-name: "org.junit.jupiter:junit-jupiter"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

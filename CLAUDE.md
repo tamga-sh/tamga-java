@@ -13,14 +13,16 @@ endpoint, and enum value comes from it — is the Tamga API protocol specificati
 throughout this file by that name. It is maintained privately and is not linkable from public
 documentation.
 
-**Current state: crypto/checkout/proof are real; HTTP client surface is still stub.**
-`crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA PKCS1/PSS),
-`checkout/` (`LicenseFile`, `MachineFile`), and `proof/` (`OfflineProof` +
-`CanonicalJson`) are implemented and tested (118 tests, 96%+ instruction coverage). The
-HTTP-facing surface (`TamgaClient`'s endpoint methods, `Transport.java`, the full JSON:API error
-model, entitlement caching, heartbeat scheduling, the full `Policy`/`ValidationCode` types) is
-still stub — see each of those files' own doc comments for what's deferred. Do not assume any
-method on `TamgaClient` does anything yet.
+**Current state: complete.** `crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA
+PKCS1/PSS), `checkout/` (`LicenseFile`, `MachineFile`), `proof/` (`OfflineProof` +
+`CanonicalJson`), and the HTTP surface (`TamgaClient`'s 20 endpoint methods, `Transport`,
+`AuthTransport`'s seven forms, the JSON:API error model, the entitlement cache, both heartbeat
+schedulers, and the full `Policy`/`ValidationCode` types) are all implemented and tested — 235
+tests, ~90% instruction coverage against an 80% gate.
+
+The normative description of the network surface is
+`../docs/api-client-contract.md`, derived from `tamga-go`. Behavioural changes to
+`TamgaClient`/`Transport` should update that document too, or the fleet drifts apart again.
 
 ## Crypto Architecture
 
@@ -75,26 +77,33 @@ bytes explicitly, never relying on `String.compareTo()`/`TreeMap`'s natural orde
 tamga-java/
 ├── settings.gradle.kts                     # rootProject.name = "tamga-sdk", single module
 ├── build.gradle.kts                        # group = "sh.tamga", artifactId = "tamga-sdk"
-├── gradle/wrapper/                         # pinned Gradle wrapper (8.14.5; build JDK = Temurin 17)
+├── gradle/wrapper/                         # pinned Gradle wrapper (9.7.0; build JDK = Temurin 17)
 ├── config/
 │   ├── checkstyle/google_checks.xml        # Google Java Style, wired via the checkstyle plugin
 │   └── spotbugs/exclude.xml                # near-empty; see file header before adding excludes
 ├── src/
 │   ├── main/
 │   │   └── java/sh/tamga/sdk/
-│   │       ├── TamgaClient.java            # entry point; builder requires accountId + baseUrl
+│   │       ├── TamgaClient.java            # entry point; builder requires accountId + auth
 │   │       ├── Transport.java              # OkHttp-based transport — hand-rolled
-│   │       ├── model/                      # License, Machine, LicenseScheme, HeartbeatStatus,
-│   │       │                               #   CanonicalJson, TamgaJsonMapper, ValidationCode
-│   │       │                               #   (ValidationCode/Policy still stub)
+│   │       ├── AuthTransport.java          # the seven auth forms, as static factories
+│   │       ├── EntitlementCache.java       # 60s TTL, keyed by license id
+│   │       ├── HeartbeatScheduler.java     # 600s window (ProcessHeartbeatScheduler is 30s)
+│   │       ├── model/                      # License, Machine, Component, Process, Entitlement,
+│   │       │                               #   Policy, Scope, ValidationCode/Meta, Page,
+│   │       │                               #   CanonicalJson, TamgaJsonMapper
 │   │       ├── crypto/                     # Ed25519, AesGcm, Hkdf, Ecdsa, Rsa
 │   │       ├── checkout/                   # LicenseFile, MachineFile — PEM parse/verify/decrypt
 │   │       ├── proof/                      # OfflineProof — RSA-2048 PKCS#1v1.5, exact-order payload
-│   │       └── error/                      # TamgaCheckoutException (real) + TamgaError (still stub)
+│   │       └── error/                      # TamgaCheckoutException, TamgaApiException + 13 typed
+│   │                                       #   subclasses, TamgaTransportException
 │   └── test/java/sh/tamga/sdk/             # JUnit 5 + AssertJ, mirrors src/main package-for-package
 └── .github/workflows/
     ├── ci.yml                              # checkstyle + spotbugs + check (JUnit5/JaCoCo) + codecov
-    └── release.yml                         # release-please + publishToMavenCentral on release
+    └── release.yml                         # release-please, then publishToMavenCentral gated on
+                                            #   its release_created output (NOT on a
+                                            #   `release: published` trigger — see the workflow
+                                            #   header for why that never fired)
 ```
 
 There is no server here and no `tamga-web`-equivalent binary — `tamga-sdk` is the one artifact
@@ -144,8 +153,9 @@ source doc for the full set, including analytics/EE items that don't touch this 
   rest of the SDK fleet already ships the handling: parsed and capped `Retry-After`, jittered
   exponential backoff, auto-retry scoped to `GET` plus the five safe `POST` actions (`validate`,
   `validate-key`, `check-in`, `check-out`, `ping`), with resource creation deliberately excluded.
-  This SDK ships none of it yet only because it has no HTTP transport at all — implementing
-  `Transport.java` means implementing this too.
+  Implemented in `Transport`: see `isRetryable`, `parseRetryAfterSeconds` and `retryDelayMillis`,
+  and `RateLimitTest` for the regressions that pin the policy — in particular that `POST
+  /machines` makes exactly one call.
 - **`Tamga-Environment` request header does nothing server-side.** It's a planned EE feature with
   no request-parsing code path yet. Don't expose a client-facing "environment" option that implies
   it's honored today.
@@ -153,13 +163,17 @@ source doc for the full set, including analytics/EE items that don't touch this 
   literal string `"DENY_ACCESS"` and `heartbeat_resurrection_strategy` to `"NO_RESURRECTION"` —
   neither is a real variant. The server silently treats both as the "no restriction" variant
   (`NO_OVERAGE`/`NO_REVIVE`). Deserializers here must not crash on these strings and must not
-  invent fake enum cases implying restrictive behavior the server doesn't actually have. (Still
-  stub — the full `Policy` type is deferred; `LicenseScheme` is the only piece of this area
-  implemented so far, since `MachineFile`'s scheme dispatch needed it.)
+  invent fake enum cases implying restrictive behavior the server doesn't actually have.
+  Implemented: `Policy` keeps all three strategy fields as raw strings and exposes
+  `effectiveOverageStrategy()`/`effectiveResurrectionStrategy()`/`effectiveCullStrategy()`
+  normalizers. Read the raw field and you get a false negative; `"DENY_ACCESS"` in particular
+  reads as maximally restrictive and means the opposite.
 - **Heartbeat windows are hardcoded, not policy-driven.** Machine heartbeat window is a hardcoded
   600s regardless of `policy.heartbeat_duration`; process heartbeat window is a hardcoded 30s with
   no resurrection grace period at all. Any heartbeat-scheduler helper should derive its ping
   interval from these hardcoded constants, not from a policy value the server ignores.
+  `HeartbeatScheduler.WINDOW`/`ProcessHeartbeatScheduler.WINDOW` encode them, with the default
+  interval at a third of the window so two consecutive failed pings are survivable.
 - **Both checkout formats derive their AES key with HKDF-SHA256** (`crypto.Hkdf`), with different,
   non-interchangeable parameters: license files use salt `tamga:license-file-key-v1` / `info`
   `license-file` (`Hkdf.deriveLicenseFileKey`); machine files use salt
@@ -188,9 +202,12 @@ source doc for the full set, including analytics/EE items that don't touch this 
 ## Testing
 
 - **JUnit 5 + AssertJ**, run via `useJUnitPlatform()`. `src/test/java/sh/tamga/sdk/` mirrors
-  `src/main/java/sh/tamga/sdk/` package-for-package. Mockito is declared as a dependency but not
-  yet needed by any real test — the crypto/checkout/proof suites use real generated keys and
-  signatures throughout, not mocks.
+  `src/main/java/sh/tamga/sdk/` package-for-package. Mockito is declared as a dependency but is
+  still not used by any test, and that is deliberate: the crypto/checkout/proof suites use real
+  generated keys and signatures, and the client/transport suites run against a real loopback
+  `MockWebServer` rather than a mocked round-tripper — mirroring how `tamga-go` tests against
+  `net/http/httptest`. Header construction, URL escaping and retry behaviour are only meaningful
+  when something actually parses the bytes.
 - CI gates on **80% instruction coverage** via `jacocoTestCoverageVerification` (wired in
   `build.gradle.kts`, `violationRules { rule { limit { minimum = 0.80 } } }`) — a failing coverage
   gate fails the job the same way a failing test does. Run `./gradlew check` locally before
@@ -223,7 +240,7 @@ source doc for the full set, including analytics/EE items that don't touch this 
   version of the Java Runtime". `checkstyle.toolVersion` is pinned to **12.3.1** in
   `build.gradle.kts` for exactly this reason — verified locally, not a guess. Don't bump it past
   the 12.x line without also reconsidering the JDK 17 toolchain pin (or bumping both together
-  deliberately). The Gradle wrapper itself is pinned to **8.14.5**, one line above the minimum
+  deliberately). The Gradle wrapper itself is pinned to **9.7.0**, one line above the minimum
   needed for `com.vanniktech.maven.publish` 0.37.0's Maven-publish integration (an older 8.11.x
   wrapper fails at configuration time with `Unresolved reference` / missing `ProjectLayout` APIs)
   — bumping the `vanniktech` plugin version may require bumping the wrapper again; check both

@@ -30,4 +30,22 @@
     <Method name="instance" />
     <Bug pattern="MS_EXPOSE_REP" />
   </Match>
+  <!--
+    TamgaClient.Builder.httpClient(OkHttpClient) deliberately stores the caller's client rather
+    than copying it. That is the entire purpose of the overload: a caller supplying their own
+    OkHttpClient wants THEIR connection pool, proxy, TLS configuration and interceptors used, and
+    a defensive copy would silently discard exactly what they configured. OkHttpClient is itself
+    effectively immutable (assembled through OkHttpClient.Builder, and documented as safe to
+    share across threads), so the "externally mutable object" this rule guards against does not
+    apply here. A false positive against a deliberate escape hatch, not a case to fix.
+
+    NOTE: an XML comment may not contain a double hyphen, which is why this block spells out
+    parentheticals instead of using dashes. A malformed filter file does not fail loudly; SpotBugs
+    ignores it wholesale, so every exclusion below silently stops applying.
+  -->
+  <Match>
+    <Class name="sh.tamga.sdk.TamgaClient$Builder" />
+    <Method name="httpClient" />
+    <Bug pattern="EI_EXPOSE_REP2" />
+  </Match>
 </FindBugsFilter>

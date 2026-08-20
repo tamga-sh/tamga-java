@@ -3,6 +3,7 @@ package sh.tamga.sdk.model;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Collections;
@@ -13,11 +14,13 @@ import java.util.Objects;
  * A license resource, flattened from the JSON:API {@code data.id} + {@code data.attributes} shape
  * for ergonomic use.
  *
- * <p><b>Scope note:</b> this models exactly the fields needed to decode a checked-out {@code .lic}
- * file's embedded resource ({@code sh.tamga.sdk.checkout.LicenseFile}) -- entitlement caching,
- * relationship IDs (product/policy/user/environment), and the full {@code TamgaClient}-facing
- * validate-by-key/validate-by-ID response shapes are still deferred to a future session, same as
- * before this architecture pivot.
+ * <p>The same type serves two paths: the subset embedded in a checked-out {@code .lic} file
+ * ({@code sh.tamga.sdk.checkout.LicenseFile}) and the full resource returned by the validation and
+ * check-in endpoints. A field the current path does not carry is simply {@code null} or zero --
+ * an offline file, for instance, carries no {@code status} or {@code machines_count}.
+ *
+ * <p>Relationship ids (product/policy/user/environment) are not modeled: this resource carries no
+ * {@code relationships} object server-side.
  *
  * <p>Plain nullable accessors, not {@code Optional}-wrapped -- reserved for fields where the wire
  * genuinely distinguishes absent from null, which a straightforward Jackson binding onto this
@@ -33,9 +36,33 @@ public final class License {
   private final Instant lastValidatedAt;
   private final Instant lastCheckInAt;
   private final Map<String, Object> metadata;
+  private final String name;
+  private final String status;
+  private final String scheme;
+  private final Integer maxMachines;
+  private final Integer maxUsers;
+  private final Integer maxUses;
+  private final int machinesCount;
+  private final Instant lastCheckOutAt;
+  private final Instant created;
+  private final Instant updated;
+  private final boolean protectedLicense;
+  private final boolean floating;
+  private final boolean strict;
+  private final boolean encrypted;
 
   License(String id, String key, boolean suspended, Instant expiry, int uses,
       Instant lastValidatedAt, Instant lastCheckInAt, Map<String, Object> metadata) {
+    this(id, key, suspended, expiry, uses, lastValidatedAt, lastCheckInAt, metadata, null, null,
+        null, null, null, null, 0, null, null, null, false, false, false, false);
+  }
+
+  @SuppressWarnings("checkstyle:ParameterNumber")
+  License(String id, String key, boolean suspended, Instant expiry, int uses,
+      Instant lastValidatedAt, Instant lastCheckInAt, Map<String, Object> metadata, String name,
+      String status, String scheme, Integer maxMachines, Integer maxUsers, Integer maxUses,
+      int machinesCount, Instant lastCheckOutAt, Instant created, Instant updated,
+      boolean protectedLicense, boolean floating, boolean strict, boolean encrypted) {
     this.id = id;
     this.key = key;
     this.suspended = suspended;
@@ -44,6 +71,124 @@ public final class License {
     this.lastValidatedAt = lastValidatedAt;
     this.lastCheckInAt = lastCheckInAt;
     this.metadata = metadata;
+    this.name = name;
+    this.status = status;
+    this.scheme = scheme;
+    this.maxMachines = maxMachines;
+    this.maxUsers = maxUsers;
+    this.maxUses = maxUses;
+    this.machinesCount = machinesCount;
+    this.lastCheckOutAt = lastCheckOutAt;
+    this.created = created;
+    this.updated = updated;
+    this.protectedLicense = protectedLicense;
+    this.floating = floating;
+    this.strict = strict;
+    this.encrypted = encrypted;
+  }
+
+  /**
+   * Decodes a single {@code {id, type, attributes}} license resource node, as returned by the
+   * validation and check-in endpoints. Returns {@code null} for a null or absent node.
+   */
+  public static License fromResourceNode(JsonNode resource) {
+    if (resource == null || resource.isNull()) {
+      return null;
+    }
+    JsonNode attrs = resource.path("attributes");
+    return new License(
+        WireNodes.text(resource, "id"),
+        WireNodes.text(attrs, "key"),
+        WireNodes.bool(attrs, "suspended"),
+        WireNodes.instant(attrs, "expiry"),
+        WireNodes.intOrZero(attrs, "uses"),
+        WireNodes.instant(attrs, "last_validated_at"),
+        WireNodes.instant(attrs, "last_check_in_at"),
+        WireNodes.objectMap(attrs, "metadata"),
+        WireNodes.text(attrs, "name"),
+        WireNodes.text(attrs, "status"),
+        WireNodes.text(attrs, "scheme"),
+        WireNodes.integer(attrs, "max_machines"),
+        WireNodes.integer(attrs, "max_users"),
+        WireNodes.integer(attrs, "max_uses"),
+        WireNodes.intOrZero(attrs, "machines_count"),
+        WireNodes.instant(attrs, "last_check_out_at"),
+        WireNodes.instant(attrs, "created"),
+        WireNodes.instant(attrs, "updated"),
+        WireNodes.bool(attrs, "protected"),
+        WireNodes.bool(attrs, "floating"),
+        WireNodes.bool(attrs, "strict"),
+        WireNodes.bool(attrs, "encrypted"));
+  }
+
+  /** Returns the license's display name, or {@code null}. */
+  public String name() {
+    return name;
+  }
+
+  /** Returns the license status string, or {@code null} when decoded from an offline file. */
+  public String status() {
+    return status;
+  }
+
+  /** Returns the key/checkout signing scheme as a raw wire string, or {@code null}. */
+  public String scheme() {
+    return scheme;
+  }
+
+  /** Returns the machine limit carried on the license, or {@code null}. */
+  public Integer maxMachines() {
+    return maxMachines;
+  }
+
+  /** Returns the user limit carried on the license, or {@code null}. */
+  public Integer maxUsers() {
+    return maxUsers;
+  }
+
+  /** Returns the use limit carried on the license, or {@code null}. */
+  public Integer maxUses() {
+    return maxUses;
+  }
+
+  /** Returns how many machines are currently registered against this license. */
+  public int machinesCount() {
+    return machinesCount;
+  }
+
+  /** Returns when the license was last checked out, or {@code null}. */
+  public Instant lastCheckOutAt() {
+    return lastCheckOutAt;
+  }
+
+  /** Returns when the license was created, or {@code null}. */
+  public Instant created() {
+    return created;
+  }
+
+  /** Returns when the license was last updated, or {@code null}. */
+  public Instant updated() {
+    return updated;
+  }
+
+  /** Returns whether the license is protected. */
+  public boolean isProtected() {
+    return protectedLicense;
+  }
+
+  /** Returns whether the license is floating. */
+  public boolean floating() {
+    return floating;
+  }
+
+  /** Returns whether the license is strict. */
+  public boolean strict() {
+    return strict;
+  }
+
+  /** Returns whether checkout files for this license are encrypted. */
+  public boolean encrypted() {
+    return encrypted;
   }
 
   /** Returns the license's unique identifier. */
