@@ -13,6 +13,7 @@ import mockwebserver3.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import sh.tamga.sdk.error.TamgaActivationValidationException;
 import sh.tamga.sdk.error.TamgaMachineOverLimitException;
 import sh.tamga.sdk.model.ActivationResult;
 import sh.tamga.sdk.model.CheckOutOptions;
@@ -291,20 +292,25 @@ class TamgaClientTest {
   }
 
   @Test
-  void activateMachineRollsBackWhenValidationItselfFails() throws Exception {
+  void activateMachineKeepsTheMachineWhenValidationItselfFails() throws Exception {
     enqueueJson(machineBody());
     server.enqueue(new MockResponse.Builder().code(500)
         .body("{\"errors\":[{\"code\":\"INTERNAL_SERVER_ERROR\"}]}").build());
-    server.enqueue(new MockResponse.Builder().code(204).build());
 
     assertThatThrownBy(
         () -> client.activateMachine(CreateMachineOptions.of("fp-1", "lic-1"), null))
-        .isInstanceOf(sh.tamga.sdk.error.TamgaApiException.class);
+        .isInstanceOf(TamgaActivationValidationException.class)
+        .satisfies(thrown -> {
+          // The machine is handed back so the caller can retry validation or delete it. A
+          // transient failure is not a verdict about the license, and deleting on one would
+          // destroy a seat the license may well be entitled to.
+          Machine stranded = ((TamgaActivationValidationException) thrown).machine();
+          assertThat(stranded.id()).isEqualTo("mach-1");
+        })
+        .hasCauseInstanceOf(sh.tamga.sdk.error.TamgaApiException.class);
 
-    server.takeRequest();
-    server.takeRequest();
-    // We cannot tell whether the machine is permitted, so it is rolled back rather than leaked.
-    assertThat(server.takeRequest().getMethod()).isEqualTo("DELETE");
+    // Exactly two calls: the create and the failed validate. No DELETE. This matches tamga-go.
+    assertThat(server.getRequestCount()).isEqualTo(2);
   }
 
   @Test

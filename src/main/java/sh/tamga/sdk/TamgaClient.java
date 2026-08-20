@@ -14,6 +14,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
+import sh.tamga.sdk.error.TamgaActivationValidationException;
 import sh.tamga.sdk.error.TamgaApiException;
 import sh.tamga.sdk.error.TamgaMachineOverLimitException;
 import sh.tamga.sdk.model.ActivationResult;
@@ -219,15 +220,16 @@ public final class TamgaClient {
    * over-limit verdict. Machine creation itself enforces nothing, so without the rollback an
    * over-limit activation would leave a row behind that still consumes a seat.
    *
-   * <p><b>Divergence from tamga-go, deliberate:</b> Go rolls back only on an over-limit code and
-   * hands a failed validate's error back alongside the created machine. This method also rolls
-   * back when the validate call itself fails, because throwing leaves no way to return the machine
-   * -- propagating without deleting would strand a seat whose id the caller never received. See
-   * the divergence register in {@code docs/api-client-contract.md}.
+   * <p>If the validation call itself fails, the machine is <b>not</b> deleted: a network blip is
+   * not a verdict about the license, and deleting on one destroys a seat the license may well be
+   * entitled to. It is handed back on {@link TamgaActivationValidationException} so the caller can
+   * retry validation or delete it. This matches {@code tamga-go}.
    *
    * @throws TamgaMachineOverLimitException if validation reported an over-limit code. The machine
    *     has already been deleted by the time this is thrown; the exception carries the validation
    *     meta so the caller can tell which limit was exceeded.
+   * @throws TamgaActivationValidationException if the validation call itself failed. The machine
+   *     still exists and is carried on the exception.
    */
   public ActivationResult activateMachine(CreateMachineOptions options, Scope scope) {
     Machine machine = createMachine(options);
@@ -235,10 +237,10 @@ public final class TamgaClient {
     try {
       validation = validateById(options.licenseId(), ValidateOptions.defaults().withScope(scope));
     } catch (RuntimeException e) {
-      // Validation failed outright, so we cannot tell whether the machine is permitted. Roll it
-      // back anyway rather than leaking a seat, and let the original failure propagate.
-      deleteQuietly(machine);
-      throw e;
+      // Deliberately NOT rolled back. Whether the machine is permitted is unknown, and a transient
+      // failure is not grounds to destroy a seat the license may be entitled to. The machine goes
+      // back to the caller on the exception, which is what makes not deleting it safe.
+      throw new TamgaActivationValidationException(machine, e);
     }
 
     ValidationMeta meta = validation.meta();
