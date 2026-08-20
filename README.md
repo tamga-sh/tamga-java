@@ -90,6 +90,10 @@ try {
 } catch (TamgaMachineOverLimitException e) {
   // The machine has already been deleted; the meta says which limit was hit.
   showSeatLimitMessage(e.validationMeta().code());
+} catch (TamgaActivationValidationException e) {
+  // The machine was created but could not be validated — a network blip, say.
+  // It still exists, so retry validation or clean it up.
+  client.deleteMachine(e.machine().id());
 }
 ```
 
@@ -297,6 +301,10 @@ boundaries, not oversights.
   only cache is the 60-second in-memory entitlement cache, which does not survive a restart.
 - **Grace periods and offline policy.** How many days to run without a network, and how many
   validation failures to tolerate, are product decisions the SDK does not make.
+- **Deciding what to do with a machine whose activation could not be validated.** If
+  `activateMachine` creates the machine and the validation call then fails, the machine is handed
+  back on `TamgaActivationValidationException` rather than deleted — a network blip is not a verdict
+  about the license. Retry the validation, or delete it.
 - **Clock trust.** A user who moves the clock backwards can revive an expired file. Offline
   verification accepts an explicit `now`, so you can pass a server-supplied timestamp — but
   choosing to do so is up to you.
