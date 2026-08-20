@@ -448,6 +448,7 @@ public final class TamgaClient {
     private Duration timeout = DEFAULT_TIMEOUT;
     private OkHttpClient httpClient;
     private Random jitter;
+    private long maxResponseBytes = Transport.MAX_RESPONSE_BYTES;
 
     private Builder(String accountId) {
       this.accountId = accountId;
@@ -509,6 +510,12 @@ public final class TamgaClient {
       return this;
     }
 
+    /** Lowers the response-body ceiling so tests can exercise it without allocating megabytes. */
+    Builder maxResponseBytes(long value) {
+      this.maxResponseBytes = value;
+      return this;
+    }
+
     /**
      * Builds the client.
      *
@@ -531,9 +538,24 @@ public final class TamgaClient {
       OkHttpClient client = httpClient != null ? httpClient
           : new OkHttpClient.Builder()
               .callTimeout(timeout.toMillis(), TimeUnit.MILLISECONDS)
+              // SECURITY: redirects are not followed.
+              //
+              // This client only ever calls a small fixed set of paths under one configured host,
+              // so a 3xx is never a legitimate response -- but following one is actively unsafe.
+              // OkHttp strips the Authorization header on a cross-origin redirect, and it does
+              // NOT do the same for a Cookie header set directly on the request, which is exactly
+              // how AuthTransport.sessionCookie sends its credential. Confirmed against okhttp
+              // 5.4.0 with a two-server probe: the session cookie was replayed verbatim to the
+              // redirect target while Authorization was correctly withheld. An open redirect on
+              // the API host, or an injected 3xx on a plaintext connection, would hand a session
+              // id to whatever host the Location header names.
+              //
+              // A caller supplying their own OkHttpClient opts out of this and owns the decision.
+              .followRedirects(false)
+              .followSslRedirects(false)
               .build();
       Transport transport = new Transport(client, parsed, accountId, apiVersion, otp,
-          userAgent(), auth, maxRetries, jitter);
+          userAgent(), auth, maxRetries, jitter, maxResponseBytes);
       return new TamgaClient(transport, new EntitlementCache(System::currentTimeMillis));
     }
 

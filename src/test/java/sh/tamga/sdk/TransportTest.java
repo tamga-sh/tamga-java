@@ -254,6 +254,53 @@ class TransportTest {
   }
 
   @Test
+  void redirectsAreNotFollowed() {
+    // SECURITY regression. OkHttp strips Authorization on a cross-origin redirect but does NOT
+    // strip a Cookie header set directly on the request, which is how sessionCookie auth sends
+    // its credential -- confirmed against okhttp 5.4.0 with a two-server probe. Since this API
+    // never legitimately redirects, not following one closes that off entirely.
+    server.enqueue(new MockResponse.Builder()
+        .code(302)
+        .addHeader("Location", "http://example.invalid/stolen")
+        .build());
+
+    assertThatThrownBy(
+        () -> clientWith(AuthTransport.sessionCookie("sess-secret")).checkIn("lic-1"))
+        .isInstanceOf(TamgaApiException.class)
+        .satisfies(thrown -> assertThat(((TamgaApiException) thrown).httpStatus()).isEqualTo(302));
+    assertThat(server.getRequestCount()).isEqualTo(1);
+  }
+
+  @Test
+  void anOversizedResponseBodyIsRefused() {
+    // A hostile or compromised endpoint must not be able to drive the embedding application into
+    // an OutOfMemoryError. The call timeout bounds duration, not size. The cap is lowered here
+    // rather than sending 32 MiB over a loopback socket.
+    enqueueLicense();
+    TamgaClient tinyLimit = TamgaClient.builder("acct-123")
+        .host(server.url("/").toString())
+        .auth(AuthTransport.licenseKey("k"))
+        .maxResponseBytes(8)
+        .build();
+
+    assertThatThrownBy(() -> tinyLimit.checkIn("lic-1"))
+        .isInstanceOf(TamgaTransportException.class)
+        .hasMessageContaining("byte limit");
+  }
+
+  @Test
+  void bodyInsideTheLimitStillReads() {
+    enqueueLicense();
+    TamgaClient roomyLimit = TamgaClient.builder("acct-123")
+        .host(server.url("/").toString())
+        .auth(AuthTransport.licenseKey("k"))
+        .maxResponseBytes(Transport.MAX_RESPONSE_BYTES)
+        .build();
+
+    assertThat(roomyLimit.checkIn("lic-1").id()).isEqualTo("lic-1");
+  }
+
+  @Test
   void buildingClientWithoutAuthIsRejected() {
     assertThatThrownBy(() -> TamgaClient.builder("acct-123").build())
         .isInstanceOf(IllegalStateException.class)

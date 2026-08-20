@@ -319,6 +319,18 @@ boundaries, not oversights.
 - **No auto-update or release-check API, and no RFC 9421 response-signature verification.** Neither
   has a working server counterpart.
 
+**Transport hardening**
+
+- **Redirects are not followed** by the client this SDK builds for you. The API never
+  legitimately redirects, and following one is unsafe: OkHttp strips the `Authorization` header on
+  a cross-origin redirect but does *not* strip a `Cookie` header, which is how
+  `AuthTransport.sessionCookie` sends its credential. Supplying your own `OkHttpClient` opts out
+  of this, and then the redirect policy is yours.
+- **Response bodies are capped at 32 MiB.** A timeout bounds how long a response may take, not how
+  large it may be.
+- **Exception messages embed server-supplied text.** `TamgaApiException.getMessage()` includes the
+  server's `detail`. Treat it as untrusted when logging.
+
 **Packaging**
 
 - **No Android artifact.** The SDK is plain Java with no native code, and OkHttp is used precisely

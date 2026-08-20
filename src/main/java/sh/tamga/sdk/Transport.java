@@ -1,7 +1,10 @@
 package sh.tamga.sdk;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -14,6 +17,7 @@ import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
+import okhttp3.ResponseBody;
 import sh.tamga.sdk.error.TamgaApiException;
 import sh.tamga.sdk.error.TamgaError;
 import sh.tamga.sdk.error.TamgaTransportException;
@@ -57,6 +61,20 @@ public final class Transport {
   /** Maximum accepted length of a sanitized {@code Tamga-Version} value. */
   static final int MAX_API_VERSION_LENGTH = 32;
 
+  /**
+   * Ceiling on how many bytes of a response body will be read into memory.
+   *
+   * <p>Without a cap, a compromised or hostile endpoint can drive the embedding application into
+   * an {@code OutOfMemoryError} simply by answering with a very large or chunked body. The call
+   * timeout bounds how long a response may take, not how large it may be, and a fast connection
+   * delivers a great deal inside 30 seconds. This applies to error bodies too, which are read
+   * before any credential has necessarily been accepted.
+   *
+   * <p>32 MiB is far above any legitimate response: the largest thing this API returns is a
+   * checkout certificate measured in kilobytes.
+   */
+  static final long MAX_RESPONSE_BYTES = 32L * 1024L * 1024L;
+
   private static final String CONTENT_TYPE_JSON_API = "application/vnd.api+json";
   private static final MediaType MEDIA_TYPE_JSON_API = MediaType.parse(CONTENT_TYPE_JSON_API);
 
@@ -82,6 +100,8 @@ public final class Transport {
   private final String userAgent;
   private final AuthTransport auth;
   private final int maxRetries;
+  /** Effective body-size ceiling. Overridable only so tests can exercise the cap cheaply. */
+  private final long maxResponseBytes;
   /**
    * Jitter source. {@code null} in production so each call reads
    * {@link ThreadLocalRandom#current()} on its own thread -- a {@code ThreadLocalRandom} instance
@@ -90,8 +110,11 @@ public final class Transport {
    */
   private final Random jitter;
 
+  @SuppressWarnings("checkstyle:ParameterNumber")
   Transport(OkHttpClient httpClient, HttpUrl baseUrl, String accountId, String apiVersion,
-      String otp, String userAgent, AuthTransport auth, int maxRetries, Random jitter) {
+      String otp, String userAgent, AuthTransport auth, int maxRetries, Random jitter,
+      long maxResponseBytes) {
+    this.maxResponseBytes = maxResponseBytes;
     this.httpClient = httpClient;
     this.baseUrl = baseUrl;
     this.accountId = accountId;
@@ -237,11 +260,7 @@ public final class Transport {
   String getText(List<String> segments, Map<String, String> query) {
     try (Response response = send("GET", segments, query, null, "application/octet-stream")) {
       throwIfError(response);
-      try {
-        return response.body().string();
-      } catch (IOException e) {
-        throw new TamgaTransportException("Failed to read the response body.", e);
-      }
+      return new String(bodyBytes(response), StandardCharsets.UTF_8);
     }
   }
 
@@ -330,11 +349,35 @@ public final class Transport {
     }
   }
 
-  private static byte[] bodyBytes(Response response) {
-    // Response.body is non-null in OkHttp 5 -- an absent body reads as zero bytes, so there is
-    // nothing to null-check here.
-    try {
-      return response.body().bytes();
+  /**
+   * Reads a response body into memory, refusing to read more than {@link #MAX_RESPONSE_BYTES}.
+   *
+   * <p>Deliberately not {@code body().bytes()}, which is unbounded. A declared
+   * {@code Content-Length} over the cap is rejected before a single byte is read; a body with no
+   * declared length, or a lying one, is cut off mid-stream once the cap is passed.
+   */
+  private byte[] bodyBytes(Response response) {
+    // Response.body is non-null in OkHttp 5 -- an absent body reads as zero bytes.
+    ResponseBody body = response.body();
+    long declaredLength = body.contentLength();
+    if (declaredLength > maxResponseBytes) {
+      throw new TamgaTransportException("Server declared a response body of " + declaredLength
+          + " bytes, above this client's " + maxResponseBytes + " byte limit.");
+    }
+    try (InputStream stream = body.byteStream()) {
+      ByteArrayOutputStream out = new ByteArrayOutputStream();
+      byte[] chunk = new byte[8192];
+      long total = 0;
+      int read;
+      while ((read = stream.read(chunk)) != -1) {
+        total += read;
+        if (total > maxResponseBytes) {
+          throw new TamgaTransportException("Server response body exceeded this client's "
+              + maxResponseBytes + " byte limit.");
+        }
+        out.write(chunk, 0, read);
+      }
+      return out.toByteArray();
     } catch (IOException e) {
       throw new TamgaTransportException("Failed to read the response body.", e);
     }
