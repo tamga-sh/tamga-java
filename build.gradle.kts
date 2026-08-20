@@ -107,7 +107,7 @@ dependencies {
     // "jdk18on" means "JDK 1.8 and onward" (BouncyCastle's own naming
     // convention for their current general-purpose artifact line) -- covers
     // this module's Java 11 target.
-    api("org.bouncycastle:bcprov-jdk18on:1.80")
+    api("org.bouncycastle:bcprov-jdk18on:1.85.2")
 
     // --- Transport ---
     // Hand-rolled HTTP transport on OkHttp. `implementation`, not `api`: no OkHttp type appears
