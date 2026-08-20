@@ -1,5 +1,6 @@
 package sh.tamga.sdk.model;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -18,10 +19,16 @@ public final class Page<T> {
   private final String nextCursor;
   private final List<T> items;
 
-  /** Creates a page. {@code nextCursor} may be {@code null} to signal the end of the list. */
+  /**
+   * Creates a page. {@code nextCursor} may be {@code null} to signal the end of the list.
+   *
+   * <p>The item list is copied. {@link #items()} returns an unmodifiable <em>view</em>, so without
+   * the copy a caller retaining their own reference to the original list could still mutate what
+   * the page reports -- and every other model type in this SDK copies mutable input.
+   */
   public Page(String nextCursor, List<T> items) {
     this.nextCursor = nextCursor;
-    this.items = items == null ? Collections.emptyList() : items;
+    this.items = items == null ? Collections.emptyList() : new ArrayList<>(items);
   }
 
   /** Returns the cursor to pass as the next request's {@code after}, or {@code null} if done. */

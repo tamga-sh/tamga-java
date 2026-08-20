@@ -219,6 +219,12 @@ public final class TamgaClient {
    * over-limit verdict. Machine creation itself enforces nothing, so without the rollback an
    * over-limit activation would leave a row behind that still consumes a seat.
    *
+   * <p><b>Divergence from tamga-go, deliberate:</b> Go rolls back only on an over-limit code and
+   * hands a failed validate's error back alongside the created machine. This method also rolls
+   * back when the validate call itself fails, because throwing leaves no way to return the machine
+   * -- propagating without deleting would strand a seat whose id the caller never received. See
+   * the divergence register in {@code docs/api-client-contract.md}.
+   *
    * @throws TamgaMachineOverLimitException if validation reported an over-limit code. The machine
    *     has already been deleted by the time this is thrown; the exception carries the validation
    *     meta so the caller can tell which limit was exceeded.
@@ -484,9 +490,10 @@ public final class TamgaClient {
       return this;
     }
 
-    /** Overrides the per-request timeout. */
+    /** Overrides the per-request timeout. A null or non-positive value keeps the default. */
     public Builder timeout(Duration value) {
-      this.timeout = value;
+      this.timeout = value == null || value.isNegative() || value.isZero()
+          ? DEFAULT_TIMEOUT : value;
       return this;
     }
 

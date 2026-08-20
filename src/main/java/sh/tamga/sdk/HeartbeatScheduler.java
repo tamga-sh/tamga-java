@@ -5,7 +5,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import sh.tamga.sdk.model.HeartbeatStatus;
 import sh.tamga.sdk.model.Machine;
@@ -47,8 +46,19 @@ public final class HeartbeatScheduler implements AutoCloseable {
   private final String machineId;
   private final Duration interval;
   private final BiConsumer<Machine, Throwable> onTick;
-  private final AtomicBoolean running = new AtomicBoolean(false);
-  private volatile ScheduledExecutorService executor;
+  /**
+   * Guards {@link #executor}, which is the single source of truth for whether this scheduler is
+   * running.
+   *
+   * <p>Lifecycle state used to be split across an {@code AtomicBoolean} and a volatile executor
+   * reference, which could be observed out of sync: a {@code stop()} landing between the flag
+   * flip and the executor assignment saw a null executor, did nothing, and left a live timer
+   * behind that no later {@code stop()} could ever reach. One lock over one field removes the
+   * window rather than narrowing it.
+   */
+  private final Object lifecycleLock = new Object();
+
+  private ScheduledExecutorService executor;
 
   private HeartbeatScheduler(TamgaClient client, String machineId, Duration interval,
       BiConsumer<Machine, Throwable> onTick) {
@@ -71,28 +81,32 @@ public final class HeartbeatScheduler implements AutoCloseable {
    * <p>Calling this on an already-running scheduler does nothing.
    */
   public void start() {
-    if (!running.compareAndSet(false, true)) {
-      return;
+    synchronized (lifecycleLock) {
+      if (executor != null) {
+        return;
+      }
+      executor = newTimer();
+      executor.scheduleAtFixedRate(this::tick, interval.toMillis(), interval.toMillis(),
+          TimeUnit.MILLISECONDS);
     }
+  }
+
+  private ScheduledExecutorService newTimer() {
     ThreadFactory factory = runnable -> {
       Thread thread = new Thread(runnable, "tamga-heartbeat-" + machineId);
       thread.setDaemon(true);
       return thread;
     };
-    ScheduledExecutorService service = Executors.newSingleThreadScheduledExecutor(factory);
-    executor = service;
-    service.scheduleAtFixedRate(this::tick, interval.toMillis(), interval.toMillis(),
-        TimeUnit.MILLISECONDS);
+    return Executors.newSingleThreadScheduledExecutor(factory);
   }
 
   /** Stops pinging. Safe to call more than once, and safe to call from a tick callback. */
   public void stop() {
-    if (!running.compareAndSet(true, false)) {
-      return;
-    }
-    ScheduledExecutorService service = executor;
-    if (service != null) {
-      service.shutdownNow();
+    synchronized (lifecycleLock) {
+      if (executor == null) {
+        return;
+      }
+      executor.shutdownNow();
       executor = null;
     }
   }
@@ -104,7 +118,9 @@ public final class HeartbeatScheduler implements AutoCloseable {
 
   /** Returns whether the scheduler is currently running. */
   public boolean running() {
-    return running.get();
+    synchronized (lifecycleLock) {
+      return executor != null;
+    }
   }
 
   /** Sends one ping and reports the outcome. Package-private so tests can drive it directly. */

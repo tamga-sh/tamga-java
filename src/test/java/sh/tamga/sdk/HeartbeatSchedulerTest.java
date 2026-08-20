@@ -5,7 +5,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import mockwebserver3.MockResponse;
 import mockwebserver3.MockWebServer;
@@ -149,6 +152,56 @@ class HeartbeatSchedulerTest {
     assertThat(builder.interval(Duration.ZERO).build()).isNotNull();
     assertThat(builder.interval(Duration.ofSeconds(-5)).build()).isNotNull();
     assertThat(builder.interval(null).build()).isNotNull();
+  }
+
+  @Test
+  void interleavedStartAndStopNeverLeavesTimerRunning() throws Exception {
+    // Regression: lifecycle state used to live in an AtomicBoolean plus a separate volatile
+    // executor reference. A stop() landing between the flag flip and the executor assignment saw
+    // a null executor, did nothing, and left a live timer that no later stop() could reach --
+    // running() would report false while the scheduler kept pinging the API forever.
+    for (int i = 0; i < 400; i++) {
+      enqueueMachine("ALIVE");
+    }
+    AtomicInteger ticks = new AtomicInteger();
+    HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, "mach-1")
+        .interval(Duration.ofMillis(10))
+        .onTick((machine, error) -> ticks.incrementAndGet())
+        .build();
+
+    ExecutorService pool = Executors.newFixedThreadPool(8);
+    CountDownLatch start = new CountDownLatch(1);
+    CountDownLatch done = new CountDownLatch(8);
+    for (int i = 0; i < 8; i++) {
+      final boolean starter = i % 2 == 0;
+      pool.submit(() -> {
+        try {
+          start.await();
+          for (int n = 0; n < 50; n++) {
+            if (starter) {
+              scheduler.start();
+            } else {
+              scheduler.stop();
+            }
+          }
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        } finally {
+          done.countDown();
+        }
+      });
+    }
+    start.countDown();
+    assertThat(done.await(30, TimeUnit.SECONDS)).isTrue();
+    pool.shutdownNow();
+
+    scheduler.stop();
+    assertThat(scheduler.running()).isFalse();
+
+    // A stopped scheduler must actually be stopped: the tick count has to settle.
+    int settled = ticks.get();
+    Thread.sleep(150);
+    assertThat(ticks.get()).isEqualTo(settled);
   }
 
   @Test
