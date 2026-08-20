@@ -1,45 +1,97 @@
 package sh.tamga.sdk.error;
 
+import com.fasterxml.jackson.databind.JsonNode;
+
 /**
- * {@code TamgaError.java}
+ * A single JSON:API error object as returned by the Tamga API.
  *
- * <p><b>STUB -- scaffolding only.</b> No error model implemented yet.
+ * <p>The wire shape is:
  *
- * <p>Intended contents once implemented:
+ * <pre>{@code
+ * {"errors": [{id, status, code, title, detail, source: {pointer}}]}
+ * }</pre>
  *
- * <ul>
- *   <li>{@code TamgaError}: an immutable record-like type modeling the JSON:API error object
- *       {@code { status: int, code: String, detail: String, pointer: String (nullable) }},
- *       deserialized from the wire shape {@code { id, status, code, title, detail, source: {
- *       pointer } }}.
- *   <li>{@code TamgaApiException}: an unchecked exception ({@code RuntimeException}) wrapping
- *       {@code TamgaError}. Callers must match on {@code code} (stable, server-documented) and
- *       never on {@code detail} (human-readable text that may change without notice).
- *   <li>Typed exception subclasses / a central {@code code} → exception-type dispatch table
- *       (single source of truth, not duplicated per client class): {@code
- *       TamgaCheckInNotRequiredException} (§E), {@code TamgaLicenseNotEncryptedException} (§F),
- *       {@code TamgaTtlInvalidException} / {@code TamgaSchemeNotSupportedException} (§G), {@code
- *       TamgaFingerprintTakenException} (§H/§J, scope differs by call site), {@code
- *       TamgaPidTakenException} (§J), {@code TamgaKeyTakenException} ({@code 409 KEY_TAKEN}),
- *       {@code TamgaDatasetInvalidException} ({@code 422 DATASET_INVALID}), {@code
- *       TamgaLicenseKeyMissingException} ({@code 422 LICENSE_KEY_MISSING}).
- *   <li>Generic fixed-status exceptions: {@code TamgaNotFoundException} (404), {@code
- *       TamgaUnauthorizedException} (401), {@code TamgaForbiddenException} (403), {@code
- *       TamgaInternalServerErrorException} (500 -- generic; the server never leaks DB detail, so
- *       don't build parsing logic expecting structured {@code detail} here).
- *   <li>A fallback to the generic {@code TamgaApiException} for any unmapped {@code code}.
- * </ul>
- *
- * <p>{@code 429 TOO_MANY_REQUESTS} must be modeled as a retryable case: the server does return it.
- * An earlier revision of this comment claimed otherwise and told contributors not to build
- * client-side backoff -- that was wrong, and the instruction has been removed. The retry mechanics
- * (capped {@code Retry-After}, jittered exponential backoff, auto-retry scoped to {@code GET} plus
- * five safe {@code POST} actions) belong in {@link sh.tamga.sdk.Transport}; this package only owns
- * the typed exception the caller sees when retries are exhausted.
+ * <p>{@link #code()} is stable and is what matching logic must use. {@link #detail()} is
+ * human-readable text that may be reworded between server versions -- never match on it.
  */
 public final class TamgaError {
 
-  private TamgaError() {
-    // Intentionally empty. Implementation deferred to a future session.
+  /** The code used when the server's response body is absent, unreadable, or not JSON:API. */
+  public static final String UNKNOWN_CODE = "UNKNOWN";
+
+  private final String id;
+  private final String status;
+  private final String code;
+  private final String title;
+  private final String detail;
+  private final String pointer;
+
+  /** Creates an error object from already-extracted fields. */
+  public TamgaError(String id, String status, String code, String title, String detail,
+      String pointer) {
+    this.id = id;
+    this.status = status;
+    this.code = code == null || code.isEmpty() ? UNKNOWN_CODE : code;
+    this.title = title;
+    this.detail = detail;
+    this.pointer = pointer;
+  }
+
+  /**
+   * Decodes the first entry of a {@code {"errors": [...]}} document.
+   *
+   * <p>Returns a synthetic {@link #UNKNOWN_CODE} error when the body is null, is not a JSON:API
+   * error document, or carries an empty {@code errors} array. Error bodies come from the network
+   * and are untrusted -- decoding one must never throw.
+   */
+  public static TamgaError fromErrorDocument(JsonNode document, String fallbackDetail) {
+    JsonNode errors = document == null ? null : document.get("errors");
+    if (errors == null || !errors.isArray() || errors.size() == 0) {
+      return new TamgaError(null, null, UNKNOWN_CODE, "Unknown Error", fallbackDetail, null);
+    }
+    JsonNode first = errors.get(0);
+    JsonNode source = first.get("source");
+    return new TamgaError(
+        textOrNull(first, "id"),
+        textOrNull(first, "status"),
+        textOrNull(first, "code"),
+        textOrNull(first, "title"),
+        textOrNull(first, "detail"),
+        source == null ? null : textOrNull(source, "pointer"));
+  }
+
+  private static String textOrNull(JsonNode parent, String field) {
+    JsonNode node = parent == null ? null : parent.get(field);
+    return node == null || node.isNull() ? null : node.asText();
+  }
+
+  /** Returns the server-assigned error id, or {@code null}. */
+  public String id() {
+    return id;
+  }
+
+  /** Returns the HTTP status as the server reported it in the body, or {@code null}. */
+  public String status() {
+    return status;
+  }
+
+  /** Returns the stable error code. This is what callers should match on. */
+  public String code() {
+    return code;
+  }
+
+  /** Returns the short error title, or {@code null}. */
+  public String title() {
+    return title;
+  }
+
+  /** Returns human-readable detail. Never match on this -- match on {@link #code()}. */
+  public String detail() {
+    return detail;
+  }
+
+  /** Returns the JSON pointer identifying the offending request field, or {@code null}. */
+  public String pointer() {
+    return pointer;
   }
 }

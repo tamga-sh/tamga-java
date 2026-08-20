@@ -3,6 +3,7 @@ package sh.tamga.sdk.model;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Collections;
@@ -13,10 +14,9 @@ import java.util.Objects;
  * A machine resource, flattened from the JSON:API {@code data.id} + {@code data.attributes}
  * shape, mirroring {@link License}'s flattening pattern.
  *
- * <p><b>Scope note:</b> models exactly the fields needed to decode a checked-out {@code .machine}
- * file's embedded resource ({@code sh.tamga.sdk.checkout.MachineFile}) -- the full {@code
- * TamgaClient}-facing machine-management surface (create/update/heartbeat-ping endpoints, a
- * heartbeat scheduler) is still deferred to a future session.
+ * <p>The same type serves two paths: the subset embedded in a checked-out {@code .machine} file
+ * ({@code sh.tamga.sdk.checkout.MachineFile}) and the full resource returned by the machine
+ * endpoints. A field the current path does not carry is simply {@code null}.
  */
 public final class Machine {
 
@@ -28,10 +28,27 @@ public final class Machine {
   private final Instant lastHeartbeatAt;
   private final Instant lastCheckOutAt;
   private final Map<String, Object> metadata;
+  private final String ip;
+  private final String hostname;
+  private final Integer cores;
+  private final Long memory;
+  private final Long disk;
+  private final Instant nextHeartbeatAt;
+  private final Instant created;
+  private final Instant updated;
 
   Machine(String id, String fingerprint, String name, String platform,
       HeartbeatStatus heartbeatStatus, Instant lastHeartbeatAt, Instant lastCheckOutAt,
       Map<String, Object> metadata) {
+    this(id, fingerprint, name, platform, heartbeatStatus, lastHeartbeatAt, lastCheckOutAt,
+        metadata, null, null, null, null, null, null, null, null);
+  }
+
+  @SuppressWarnings("checkstyle:ParameterNumber")
+  Machine(String id, String fingerprint, String name, String platform,
+      HeartbeatStatus heartbeatStatus, Instant lastHeartbeatAt, Instant lastCheckOutAt,
+      Map<String, Object> metadata, String ip, String hostname, Integer cores, Long memory,
+      Long disk, Instant nextHeartbeatAt, Instant created, Instant updated) {
     this.id = id;
     this.fingerprint = fingerprint;
     this.name = name;
@@ -40,6 +57,82 @@ public final class Machine {
     this.lastHeartbeatAt = lastHeartbeatAt;
     this.lastCheckOutAt = lastCheckOutAt;
     this.metadata = metadata;
+    this.ip = ip;
+    this.hostname = hostname;
+    this.cores = cores;
+    this.memory = memory;
+    this.disk = disk;
+    this.nextHeartbeatAt = nextHeartbeatAt;
+    this.created = created;
+    this.updated = updated;
+  }
+
+  /**
+   * Decodes a single {@code {id, type, attributes}} machine resource node, as returned by the
+   * machine endpoints. Returns {@code null} for a null or absent node.
+   */
+  public static Machine fromResourceNode(JsonNode resource) {
+    if (resource == null || resource.isNull()) {
+      return null;
+    }
+    JsonNode attrs = resource.path("attributes");
+    return new Machine(
+        WireNodes.text(resource, "id"),
+        WireNodes.text(attrs, "fingerprint"),
+        WireNodes.text(attrs, "name"),
+        WireNodes.text(attrs, "platform"),
+        HeartbeatStatus.fromWireValue(WireNodes.text(attrs, "heartbeat_status")),
+        WireNodes.instant(attrs, "last_heartbeat_at"),
+        WireNodes.instant(attrs, "last_check_out_at"),
+        WireNodes.objectMap(attrs, "metadata"),
+        WireNodes.text(attrs, "ip"),
+        WireNodes.text(attrs, "hostname"),
+        WireNodes.integer(attrs, "cores"),
+        WireNodes.longValue(attrs, "memory"),
+        WireNodes.longValue(attrs, "disk"),
+        WireNodes.instant(attrs, "next_heartbeat_at"),
+        WireNodes.instant(attrs, "created"),
+        WireNodes.instant(attrs, "updated"));
+  }
+
+  /** Returns the machine's reported IP address, or {@code null}. */
+  public String ip() {
+    return ip;
+  }
+
+  /** Returns the machine's hostname, or {@code null}. */
+  public String hostname() {
+    return hostname;
+  }
+
+  /** Returns the machine's reported core count, or {@code null}. */
+  public Integer cores() {
+    return cores;
+  }
+
+  /** Returns the machine's reported memory in bytes, or {@code null}. */
+  public Long memory() {
+    return memory;
+  }
+
+  /** Returns the machine's reported disk in bytes, or {@code null}. */
+  public Long disk() {
+    return disk;
+  }
+
+  /** Returns when the next heartbeat is expected, or {@code null}. */
+  public Instant nextHeartbeatAt() {
+    return nextHeartbeatAt;
+  }
+
+  /** Returns when the machine was registered, or {@code null}. */
+  public Instant created() {
+    return created;
+  }
+
+  /** Returns when the machine was last updated, or {@code null}. */
+  public Instant updated() {
+    return updated;
   }
 
   /** Returns the machine's unique ID. */
