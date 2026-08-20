@@ -223,6 +223,55 @@ class HeartbeatSchedulerTest {
   }
 
   @Test
+  void processSchedulerReportsFailuresAndStopsCleanly() throws Exception {
+    server.enqueue(new MockResponse.Builder().code(404)
+        .body("{\"errors\":[{\"code\":\"NOT_FOUND\"}]}").build());
+    AtomicReference<Throwable> seen = new AtomicReference<>();
+
+    // A dead process row is deleted outright, with no resurrection grace, so a
+    // failed ping is much closer to losing the registration entirely than it is
+    // for a machine. Swallowing it would leave the caller with nothing to act on.
+    ProcessHeartbeatScheduler scheduler = ProcessHeartbeatScheduler.builder(client, "proc-1")
+        .onTick((process, error) -> seen.set(error))
+        .build();
+    scheduler.tick();
+
+    assertThat(seen.get()).isInstanceOf(sh.tamga.sdk.error.TamgaApiException.class);
+    assertThat(scheduler.running()).isFalse();
+    scheduler.stop();
+    scheduler.close();
+    assertThat(scheduler.running()).isFalse();
+  }
+
+  @Test
+  void processSchedulerIntervalFallsBackToTheDefault() {
+    ProcessHeartbeatScheduler.Builder builder = ProcessHeartbeatScheduler.builder(client, "proc-1");
+
+    assertThat(builder.interval(Duration.ZERO).build()).isNotNull();
+    assertThat(builder.interval(Duration.ofSeconds(-1)).build()).isNotNull();
+    assertThat(builder.interval(null).build()).isNotNull();
+    assertThat(builder.interval(Duration.ofSeconds(5)).build().running()).isFalse();
+  }
+
+  @Test
+  void throwingProcessCallbackDoesNotStopScheduler() {
+    server.enqueue(new MockResponse.Builder().code(200)
+        .body("{\"data\":{\"id\":\"proc-1\",\"type\":\"processes\",\"attributes\":"
+            + "{\"pid\":\"77\"}}}").build());
+
+    ProcessHeartbeatScheduler scheduler = ProcessHeartbeatScheduler.builder(client, "proc-1")
+        .onTick((process, error) -> {
+          throw new IllegalStateException("caller bug");
+        })
+        .build();
+
+    // A ScheduledExecutorService silently cancels all future runs once a task
+    // throws, which would stop heartbeats permanently with no signal.
+    scheduler.tick();
+    assertThat(scheduler.running()).isFalse();
+  }
+
+  @Test
   void processSchedulerRunsAndStops() throws Exception {
     for (int i = 0; i < 20; i++) {
       server.enqueue(new MockResponse.Builder().code(200)

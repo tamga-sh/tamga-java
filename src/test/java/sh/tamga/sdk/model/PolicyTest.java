@@ -111,6 +111,70 @@ class PolicyTest {
   }
 
   @Test
+  void everyModelledAttributeIsReadable() throws Exception {
+    // The full attribute set a policy can carry, so each accessor is exercised
+    // against a real decode rather than left to rot behind an untested getter.
+    Policy policy = parse("{\"name\":\"Pro\",\"product_id\":\"prod-1\","
+        + "\"scheme\":\"ED25519_SIGN\",\"max_machines\":5,\"max_cores\":8,"
+        + "\"max_processes\":16,\"max_users\":4,\"max_uses\":100,\"duration\":31536000,"
+        + "\"heartbeat_duration\":900,\"check_in_interval\":\"week\","
+        + "\"check_in_interval_count\":2,\"overage_strategy\":\"ALLOW_2X_OVERAGE\","
+        + "\"heartbeat_cull_strategy\":\"KEEP_DEAD\","
+        + "\"heartbeat_resurrection_strategy\":\"5_MINUTE_REVIVE\","
+        + "\"machine_uniqueness_strategy\":\"UNIQUE_PER_LICENSE\","
+        + "\"expiration_strategy\":\"MAINTAIN_ACCESS\",\"expiration_basis\":\"FROM_CREATION\","
+        + "\"renewal_basis\":\"FROM_NOW\",\"authentication_strategy\":\"MIXED\","
+        + "\"use_pool\":true,\"encrypted\":true,\"require_check_in\":true,"
+        + "\"require_heartbeat\":true,\"protected\":true,\"floating\":true,\"strict\":true,"
+        + "\"created\":\"2026-08-20T10:00:00Z\",\"updated\":\"2026-08-21T10:00:00Z\","
+        + "\"metadata\":{\"tier\":\"gold\"}}");
+
+    assertThat(policy.scheme()).isEqualTo("ED25519_SIGN");
+    assertThat(policy.maxProcesses()).isEqualTo(16);
+    assertThat(policy.maxUsers()).isEqualTo(4);
+    assertThat(policy.maxUses()).isEqualTo(100);
+    assertThat(policy.checkInIntervalCount()).isEqualTo(2);
+    assertThat(policy.checkInInterval()).isEqualTo(Policy.CheckInInterval.WEEK);
+    assertThat(policy.heartbeatCullStrategyRaw()).isEqualTo("KEEP_DEAD");
+    assertThat(policy.heartbeatResurrectionStrategyRaw()).isEqualTo("5_MINUTE_REVIVE");
+    assertThat(policy.effectiveResurrectionStrategy())
+        .isEqualTo(Policy.HeartbeatResurrectionStrategy.REVIVE_5_MINUTE);
+    assertThat(policy.machineUniquenessStrategy()).isEqualTo("UNIQUE_PER_LICENSE");
+    assertThat(policy.expirationStrategy()).isEqualTo(Policy.ExpirationStrategy.MAINTAIN_ACCESS);
+    assertThat(policy.expirationBasis()).isEqualTo("FROM_CREATION");
+    assertThat(policy.renewalBasis()).isEqualTo(Policy.RenewalBasis.FROM_NOW);
+    assertThat(policy.authenticationStrategy())
+        .isEqualTo(Policy.AuthenticationStrategy.MIXED);
+    assertThat(policy.usePool()).isTrue();
+    assertThat(policy.encrypted()).isTrue();
+    assertThat(policy.updated()).isNotNull();
+    assertThat(policy.metadata()).containsEntry("tier", "gold");
+  }
+
+  @Test
+  void policyMetadataIsExposedAsAnUnmodifiableView() throws Exception {
+    Policy policy = parse("{\"metadata\":{\"tier\":\"gold\"}}");
+    java.util.Map<String, Object> metadata = policy.metadata();
+
+    org.assertj.core.api.Assertions
+        .assertThatThrownBy(() -> metadata.put("injected", "value"))
+        .isInstanceOf(UnsupportedOperationException.class);
+  }
+
+  @Test
+  void theDocumentedFreeTextConstantsAreTheServersOwn() {
+    // Free text server-side, so these are constants rather than an enum -- but
+    // the values still have to match what the server actually emits.
+    assertThat(Policy.ExpirationStrategy.RESTRICT_ACCESS).isEqualTo("RESTRICT_ACCESS");
+    assertThat(Policy.ExpirationStrategy.ALLOW_ACCESS).isEqualTo("ALLOW_ACCESS");
+    assertThat(Policy.RenewalBasis.FROM_EXPIRY).isEqualTo("FROM_EXPIRY");
+    assertThat(Policy.AuthenticationStrategy.TOKEN).isEqualTo("TOKEN");
+    assertThat(Policy.AuthenticationStrategy.LICENSE).isEqualTo("LICENSE");
+    assertThat(Policy.HeartbeatResurrectionStrategy.ALWAYS_REVIVE.wireValue())
+        .isEqualTo("ALWAYS_REVIVE");
+  }
+
+  @Test
   void nullResourceNodeDecodesToNull() {
     assertThat(Policy.fromResourceNode(null)).isNull();
   }
