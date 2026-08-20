@@ -6,9 +6,13 @@
 Official Java SDK for Tamga. Integrate license activation, offline verification, and machine
 management into your Java applications.
 
-**What ships today: offline verification only.** Everything under `crypto/`, `checkout/` and
-`proof/` is implemented and tested. The HTTP client surface — `TamgaClient` and `Transport` — is
-still an empty scaffold, so this SDK cannot yet talk to the API. See [Known gaps](#known-gaps).
+Two independent surfaces, either of which can be used without the other:
+
+- **`TamgaClient`** talks to the API — validation, activation, checkout, heartbeats, components,
+  processes and entitlements. Twenty endpoints, seven auth transports, and automatic handling of
+  HTTP 429.
+- **`checkout/` and `proof/`** verify `.lic` and `.machine` files and offline proofs with **no
+  network access at all**, once your account's public key is embedded in the application.
 
 ## Install
 
@@ -18,14 +22,14 @@ Temurin 17.
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("sh.tamga:tamga-sdk:1.2.0")
+    implementation("sh.tamga:tamga-sdk:1.3.0")
 }
 ```
 
 ```groovy
 // build.gradle
 dependencies {
-    implementation "sh.tamga:tamga-sdk:1.2.0"
+    implementation "sh.tamga:tamga-sdk:1.3.0"
 }
 ```
 
@@ -34,11 +38,70 @@ dependencies {
 <dependency>
   <groupId>sh.tamga</groupId>
   <artifactId>tamga-sdk</artifactId>
-  <version>1.2.0</version>
+  <version>1.3.0</version>
 </dependency>
 ```
 
 ## Quickstart
+
+### Validating against the API
+
+```java
+import sh.tamga.sdk.AuthTransport;
+import sh.tamga.sdk.TamgaClient;
+import sh.tamga.sdk.model.ValidationCode;
+import sh.tamga.sdk.model.ValidationResult;
+
+TamgaClient client = TamgaClient.builder("YOUR-ACCOUNT-ID")
+    .auth(AuthTransport.licenseKey(licenseKey))
+    .build();
+
+ValidationResult result = client.validateByKey(licenseKey);
+if (!result.valid()) {
+  // Branch on code, never on detail: detail is human text that may be reworded.
+  if (result.meta().code() == ValidationCode.EXPIRED) {
+    promptForRenewal();
+  }
+}
+```
+
+Activating a machine, with the seat freed automatically if the license is over its limit:
+
+```java
+import sh.tamga.sdk.HeartbeatScheduler;
+import sh.tamga.sdk.error.TamgaMachineOverLimitException;
+import sh.tamga.sdk.model.ActivationResult;
+import sh.tamga.sdk.model.CreateMachineOptions;
+import sh.tamga.sdk.model.HeartbeatStatus;
+
+try {
+  ActivationResult activation = client.activateMachine(
+      CreateMachineOptions.of(fingerprint, licenseId).withHostname("build-box"), null);
+
+  HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, activation.machine().id())
+      .onTick((machine, error) -> {
+        // DEAD means the row was culled server-side: re-activate rather than keep pinging.
+        if (machine != null && machine.heartbeatStatus() == HeartbeatStatus.DEAD) {
+          reactivate();
+        }
+      })
+      .build();
+  scheduler.start();
+} catch (TamgaMachineOverLimitException e) {
+  // The machine has already been deleted; the meta says which limit was hit.
+  showSeatLimitMessage(e.validationMeta().code());
+} catch (TamgaActivationValidationException e) {
+  // The machine was created but could not be validated — a network blip, say.
+  // It still exists, so retry validation or clean it up.
+  client.deleteMachine(e.machine().id());
+}
+```
+
+**Note:** this SDK generates no machine fingerprint for you, and embeds no account public key.
+Producing a stable, device-specific fingerprint and deciding your grace-period and enforcement
+policy remain application concerns — see [Known gaps](#known-gaps).
+
+### Verifying an offline file
 
 Verify and decrypt an offline `.lic` file that was checked out earlier. `verifyAndDecrypt` fails
 closed: a bad signature, a wrong license key, a malformed envelope and an expired file each throw a
@@ -224,22 +287,64 @@ Reporting a vulnerability: see [SECURITY.md](SECURITY.md). Do not open a public 
 
 ## Known gaps
 
-- **No HTTP client.** `TamgaClient` and `Transport` are empty scaffolds — neither has any method.
-  License activation, validation, check-in, checkout, heartbeat and entitlement calls are not
-  implemented in this SDK yet. Offline artifacts must be obtained out of band for now.
-- **No auth transports.** Because there is no HTTP layer, this SDK sends no credentials and
-  implements no `Authorization` header construction.
-- **No 429 handling.** The server does return HTTP 429, and the SDK fleet handles it with a parsed
-  and capped `Retry-After`, jittered exponential backoff, and auto-retry scoped to `GET` plus the
-  five safe `POST` actions (`validate`, `validate-key`, `check-in`, `check-out`, `ping`), with
-  resource creation excluded. This SDK ships none of that, purely because it has no transport to
-  put it in.
-- **`ValidationCode`, `Policy` and `TamgaError` are empty types.** They exist so the package layout
-  is stable; they carry no values or fields yet. `LicenseScheme` and `HeartbeatStatus` are real.
-- **`License` and `Machine` model only the fields carried inside an offline file**, not the full
-  API resource shape.
-- **No Android artifact.** The SDK is plain Java with no native code, so it runs on Android, but no
-  AAR is published and Android is not part of the CI matrix.
+This SDK is a protocol client, not a licensing-enforcement framework. These are deliberate
+boundaries, not oversights.
+
+**Left to your application**
+
+- **Machine fingerprints.** No SDK in the fleet generates one. Producing a stable, device-specific,
+  reasonably tamper-resistant fingerprint — and keeping it stable across reinstalls — is yours.
+- **Embedding the account public key**, plus its rotation and key-id handling. Offline verification
+  takes the key as a parameter; getting it into the binary is out of scope.
+- **Persistence.** Nothing is written to disk. Storing `.lic`/`.machine` files, deciding when to
+  refresh them, and securing the license key (keychain, DPAPI, file permissions) are yours. The
+  only cache is the 60-second in-memory entitlement cache, which does not survive a restart.
+- **Grace periods and offline policy.** How many days to run without a network, and how many
+  validation failures to tolerate, are product decisions the SDK does not make.
+- **Deciding what to do with a machine whose activation could not be validated.** If
+  `activateMachine` creates the machine and the validation call then fails, the machine is handed
+  back on `TamgaActivationValidationException` rather than deleted — a network blip is not a verdict
+  about the license. Retry the validation, or delete it.
+- **Clock trust.** A user who moves the clock backwards can revive an expired file. Offline
+  verification accepts an explicit `now`, so you can pass a server-supplied timestamp — but
+  choosing to do so is up to you.
+- **Enforcement.** A `ValidationCode` says what happened, not what your application should do
+  about it.
+
+**Server-side limitations this SDK inherits**
+
+- **`.machine` files carry no signed expiry.** Only `.lic` files do. A machine file is bounded in
+  practice by the `ttl` requested at checkout and by its fingerprint binding.
+- **10 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled for
+  forward-compatibility, and `ValidationCode.reachable()` reports which. Do not build behaviour on
+  an unreachable one.
+- **Only four `Scope` fields are enforced** — product, policy, user, environment. The other four
+  (`fingerprint`, `version`, `checksum`, `entitlements`) are sent, parsed, and then ignored.
+- **The heartbeat window is a hardcoded 600s**, not driven by `policy.heartbeat_duration` despite
+  that field existing. `HeartbeatScheduler` derives its interval from the real 600s.
+- **`hasEntitlement` reads a single page** of 100 entitlements, the server maximum. Paginate
+  `listEntitlements` yourself if a license may carry more.
+- **No auto-update or release-check API, and no RFC 9421 response-signature verification.** Neither
+  has a working server counterpart.
+
+**Transport hardening**
+
+- **Redirects are not followed** by the client this SDK builds for you. The API never
+  legitimately redirects, and following one is unsafe: OkHttp strips the `Authorization` header on
+  a cross-origin redirect but does *not* strip a `Cookie` header, which is how
+  `AuthTransport.sessionCookie` sends its credential. Supplying your own `OkHttpClient` opts out
+  of this, and then the redirect policy is yours.
+- **Response bodies are capped at 32 MiB.** A timeout bounds how long a response may take, not how
+  large it may be.
+- **Exception messages embed server-supplied text.** `TamgaApiException.getMessage()` includes the
+  server's `detail`. Treat it as untrusted when logging.
+
+**Packaging**
+
+- **No Android artifact.** The SDK is plain Java with no native code, and OkHttp is used precisely
+  so it runs on Android — but no AAR is published and Android is not part of the CI matrix.
+- **No asynchronous API.** Every endpoint method blocks. Wrap calls in your own executor if you
+  need them off the calling thread.
 
 ## Documentation
 

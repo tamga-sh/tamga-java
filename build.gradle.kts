@@ -79,6 +79,13 @@ java {
 // correctly on macOS/Linux but potentially misread on Windows.
 tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
+    // sourceCompatibility/targetCompatibility alone only constrain language level and bytecode
+    // version -- they do NOT stop code from linking against an API introduced after Java 11.
+    // Under the Temurin 17 toolchain a call to, say, a Java 12+ method compiles cleanly and then
+    // throws NoSuchMethodError on a real JDK 11 consumer. `release` compiles against the Java 11
+    // API signatures themselves, turning that runtime failure into a compile error. The CI matrix
+    // is 17/21 with no JDK 11 leg, so nothing else would catch it.
+    options.release.set(11)
 }
 tasks.withType<Javadoc> {
     options.encoding = "UTF-8"
@@ -103,8 +110,15 @@ dependencies {
     api("org.bouncycastle:bcprov-jdk18on:1.80")
 
     // --- Transport ---
-    // Hand-rolled HTTP transport on OkHttp.
-    api("com.squareup.okhttp3:okhttp:5.4.0")
+    // Hand-rolled HTTP transport on OkHttp. `implementation`, not `api`: no OkHttp type appears
+    // in this SDK's public signatures except TamgaClient.Builder.httpClient(OkHttpClient), which
+    // is an opt-in escape hatch, so leaking OkHttp onto every consumer's compile classpath would
+    // constrain their own dependency graph for nothing. Callers who do use that overload already
+    // depend on OkHttp themselves by definition.
+    //
+    // OkHttp rather than java.net.http.HttpClient: this SDK is documented as running on Android
+    // (README "Known gaps"), and java.net.http does not exist on Android at any API level.
+    implementation("com.squareup.okhttp3:okhttp:5.4.0")
 
     // --- JSON ---
     // `FAIL_ON_UNKNOWN_PROPERTIES = false` config (forward-compat with server
@@ -125,6 +139,11 @@ dependencies {
     testImplementation("org.assertj:assertj-core:3.27.7")
     testImplementation("org.mockito:mockito-core:5.23.0")
     testImplementation("org.mockito:mockito-junit-jupiter:5.23.0")
+    // A real loopback HTTP server for transport/client tests, mirroring how tamga-go tests its
+    // client against net/http/httptest rather than a mocked round-tripper: the request actually
+    // goes over a socket, so header construction, URL escaping and retry behaviour are exercised
+    // end to end instead of asserted against a stub.
+    testImplementation("com.squareup.okhttp3:mockwebserver3-junit5:5.4.0")
 }
 
 tasks.test {

@@ -34,7 +34,7 @@ version tags.
 ## Release Secrets (repo maintainers only)
 
 `.github/workflows/release.yml`'s `publish` job requires these repo secrets to be configured
-before `./gradlew publishToMavenCentral` can run on `release: published`:
+before `./gradlew publishToMavenCentral` can run when release-please cuts a release:
 
 | Secret | Purpose |
 |---|---|
