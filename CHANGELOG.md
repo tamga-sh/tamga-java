@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/tamga-sh/tamga-java/compare/v1.2.2...v1.3.0) (2026-08-20)
+
+
+### Features
+
+* **client:** implement the HTTP API client ([#32](https://github.com/tamga-sh/tamga-java/issues/32)) ([1378f40](https://github.com/tamga-sh/tamga-java/commit/1378f40cadf95bb69a4907ef96c336a43cb1c47c))
+
 ## [1.2.2](https://github.com/tamga-sh/tamga-java/compare/v1.2.1...v1.2.2) (2026-08-18)
 
 
