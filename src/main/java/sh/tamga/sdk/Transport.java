@@ -21,6 +21,7 @@ import okhttp3.ResponseBody;
 import sh.tamga.sdk.error.TamgaApiException;
 import sh.tamga.sdk.error.TamgaError;
 import sh.tamga.sdk.error.TamgaTransportException;
+import sh.tamga.sdk.model.RateLimitInfo;
 import sh.tamga.sdk.model.ResponseMetadata;
 import sh.tamga.sdk.model.TamgaJsonMapper;
 
@@ -474,8 +475,18 @@ public final class Transport {
     throw TamgaApiException.from(error, response.code(), metadata);
   }
 
+  /**
+   * Reads the diagnostic headers off a response.
+   *
+   * <p>The {@code x-ratelimit-*} four are read here too, and are absent rather than an error when
+   * the server has rate limiting switched off: its middleware returns before writing them if no
+   * limiter was built.
+   */
   private static ResponseMetadata metadataOf(Response response) {
     return new ResponseMetadata(response.header("Tamga-Version"), response.header("Tamga-Edition"),
-        response.header("Tamga-Mode"), response.header("X-Request-Id"));
+        response.header("Tamga-Mode"), response.header("X-Request-Id"),
+        RateLimitInfo.fromHeaders(response.header("x-ratelimit-limit"),
+            response.header("x-ratelimit-remaining"), response.header("x-ratelimit-reset"),
+            response.header("x-ratelimit-window")));
   }
 }
