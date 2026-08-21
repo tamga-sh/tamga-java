@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.4.0](https://github.com/tamga-sh/tamga-java/compare/v1.3.1...v1.4.0) (2026-08-21)
+
+
+### Features
+
+* model the four x-ratelimit headers the server really sets ([3026bdd](https://github.com/tamga-sh/tamga-java/commit/3026bddf6b9592a61b5992c6d0ea14f052846cf6))
+* pin the rate-limit surface, absence included ([eaa2662](https://github.com/tamga-sh/tamga-java/commit/eaa2662706edcf27f4fc20db6b49cf7d5e5bc250))
+* record what the rate-limit headers say and where they surface ([eac10ee](https://github.com/tamga-sh/tamga-java/commit/eac10eeaa4cf4206de85a4274637149bc9095e2c))
+* surface the x-ratelimit headers on response metadata (M19) ([4912954](https://github.com/tamga-sh/tamga-java/commit/49129540ec9c463a9ec990e0b2351b32abf8a0ca))
+
 ## [1.3.1](https://github.com/tamga-sh/tamga-java/compare/v1.3.0...v1.3.1) (2026-08-21)
 
 
