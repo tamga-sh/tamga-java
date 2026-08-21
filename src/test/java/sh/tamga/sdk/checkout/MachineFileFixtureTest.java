@@ -221,6 +221,8 @@ class MachineFileFixtureTest {
         fixture.alg().replace("+v2", "+v2+v2"),
         suffix + "+v2",
         "base64+" + suffix,
+        "+" + suffix + "+v2",
+        fixture.alg() + "+",
     };
 
     for (String impostor : impostors) {

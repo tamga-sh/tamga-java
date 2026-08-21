@@ -56,6 +56,10 @@ final class MachineFileAlg {
    * @throws TamgaCheckoutException.UnsupportedAlgorithmException if the string is not
    *     {@code <encoding>+<signing-suffix>+v2}, if the encoding or version marker is not one this
    *     SDK implements, or if the signing suffix contradicts {@code scheme}.
+   * @throws TamgaCheckoutException.SchemeNotSupportedException if {@code scheme} is {@link
+   *     LicenseScheme#RSA_2048_JWT_RS256}. Unreachable through {@link MachineFile}, which refuses
+   *     that scheme before calling here -- but this method is the one place that must never map it
+   *     onto {@code rsa-sha256}, so it throws rather than relying on its only caller.
    */
   static MachineFileAlg parse(String alg, LicenseScheme scheme) {
     int firstPlus = alg.indexOf('+');

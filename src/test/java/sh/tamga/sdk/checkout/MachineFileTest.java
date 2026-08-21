@@ -228,6 +228,20 @@ class MachineFileTest {
         .isInstanceOf(TamgaCheckoutException.SchemeNotSupportedException.class);
   }
 
+  /**
+   * The alg cross-check's own half of that guarantee, reached directly because {@link
+   * MachineFile#verify} refuses the scheme before it ever gets here. The server emits the same
+   * {@code rsa-sha256} suffix for {@code RSA_2048_PKCS1_SIGN} and {@code RSA_2048_JWT_RS256}, so
+   * the one thing this table must never do is map the JWT scheme onto that suffix and quietly
+   * agree with a PKCS#1 file's alg.
+   */
+  @Test
+  void algCrossCheckRefusesJwtRs256RatherThanMappingItOntoRsaSha256() {
+    assertThatThrownBy(
+        () -> MachineFileAlg.parse("base64+rsa-sha256+v2", LicenseScheme.RSA_2048_JWT_RS256))
+        .isInstanceOf(TamgaCheckoutException.SchemeNotSupportedException.class);
+  }
+
   @Test
   void verifyAndDecryptReturnsMachineForValidPlainFile() {
     Ed25519PrivateKeyParameters signingKey = generateEd25519Key();

@@ -17,7 +17,7 @@ documentation.
 PKCS1/PSS), `checkout/` (`LicenseFile`, `MachineFile`), `proof/` (`OfflineProof` +
 `CanonicalJson`), and the HTTP surface (`TamgaClient`'s 20 endpoint methods, `Transport`,
 `AuthTransport`'s seven forms, the JSON:API error model, the entitlement cache, both heartbeat
-schedulers, and the full `Policy`/`ValidationCode` types) are all implemented and tested — 405
+schedulers, and the full `Policy`/`ValidationCode` types) are all implemented and tested — 412
 tests, ~97% instruction coverage against an 80% gate.
 
 The normative description of the network surface is
