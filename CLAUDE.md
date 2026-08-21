@@ -15,10 +15,10 @@ documentation.
 
 **Current state: complete.** `crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA
 PKCS1/PSS), `checkout/` (`LicenseFile`, `MachineFile`), `proof/` (`OfflineProof` +
-`CanonicalJson`), and the HTTP surface (`TamgaClient`'s 20 endpoint methods, `Transport`,
+`CanonicalJson`), and the HTTP surface (`TamgaClient`'s 31 endpoint methods, `Transport`,
 `AuthTransport`'s seven forms, the JSON:API error model, the entitlement cache, both heartbeat
-schedulers, and the full `Policy`/`ValidationCode` types) are all implemented and tested — 412
-tests, ~97% instruction coverage against an 80% gate.
+schedulers, and the full `Policy`/`ValidationCode` types) are all implemented and tested — 478
+tests, ~97.7% instruction coverage against an 80% gate.
 
 The normative description of the network surface is
 `../docs/api-client-contract.md`, derived from `tamga-go`. Behavioural changes to
@@ -133,7 +133,7 @@ no-op or advertise a guarantee the server doesn't enforce. Only the gaps relevan
 scope (license validation, checkout, machine management, offline proof) are listed — see the
 source doc for the full set, including analytics/EE items that don't touch this SDK at all.
 
-- **The upgrade-check endpoint works now.** The previous directive here — "`GET
+- **The upgrade-check endpoint works now, and is implemented** as `checkForUpgrade`. The previous directive here — "`GET
   /releases/actions/upgrade` crashes at runtime and there is no download route" — was verified
   false against the server and is deleted; it was forbidding work that is buildable. The route is
   live, public (`OptionalAuth`), and enforces the product's distribution strategy. Real
@@ -263,7 +263,7 @@ source doc for the full set, including analytics/EE items that don't touch this 
   (`COALESCE(p.heartbeat_duration, 600)`). An earlier note here claimed the window was a hardcoded
   600s regardless of the policy — that was false and is reversed. The **process** window is
   genuinely hardcoded, at a fixed `INTERVAL '30 seconds'` with no resurrection grace period.
-- **But this SDK's default ping interval still assumes the 600s fallback.**
+- **The default ping interval still assumes the 600s fallback, but no longer has to.**
   `HeartbeatScheduler.DEFAULT_INTERVAL` is a third of `WINDOW` (600s), so on a policy with a
   shorter `heartbeat_duration` the default ping rate is too slow and the machine goes `DEAD`
   between pings. Callers on such a policy must set the interval themselves. This SDK exposes no
@@ -272,8 +272,14 @@ source doc for the full set, including analytics/EE items that don't touch this 
   the machine row: `check-out` and `generate-offline-proof` resolve the machine through a
   policy-joined read and carry the true value (so `nextHeartbeatAt - lastHeartbeatAt` recovers the
   window there), while activate/create, `ping-heartbeat` and `reset-heartbeat` are bare writes with
-  no join and always report the 600s fallback. Filed upstream as `tamga-api-internal#7`. Making the
-  scheduler policy-aware still needs a policy read this SDK does not yet have.
+  no join and always report the 600s fallback, as does `PATCH /machines/{id}`. Filed upstream as
+  `tamga-api-internal#7`. The policy read now exists: `getLicensePolicy(licenseId)` returns the
+  `Policy`, `Policy.effectiveHeartbeatWindow()` applies the same `heartbeat_duration`-else-600 rule
+  the server does, and `HeartbeatScheduler.Builder.policy(...)` sizes the interval at a third of it.
+  Use `getLicensePolicy`, **not** `getPolicy`: `policy.read` is absent from the `LicenseToken`
+  permission set (`authz/mod.rs:236-261`), so the standalone policy route answers `403` under
+  license-key auth while the nested one, gated on `license.read`, works. `DEFAULT_INTERVAL` is
+  unchanged, so a caller who sets neither still gets the old behaviour.
 - **A heartbeat scheduler must never stop on a status — any status.** The only row-is-gone signal
   is a **404 from the ping itself**, which is where re-activation belongs. A stale machine is
   always one successful ping away from `ALIVE`: the ping write is a bare
@@ -303,8 +309,9 @@ source doc for the full set, including analytics/EE items that don't touch this 
   the real window and can be `DEAD`: reachable here as `MachineFile.verifyAndDecrypt` (from
   `checkOutMachine`) and `OfflineProofResult.machine()`. Note the fleet-wide M42 note lists only
   ping/reset/create/validate and concludes `DEAD` is unobservable — that holds for those four
-  routes and for SDKs without checkout, but **not** for tamga-java. A dedicated machine read
-  (`GET /machines/{id}`) would also show it; this SDK does not expose one yet (M11/M36).
+  routes and for SDKs without checkout, but **not** for tamga-java. `getMachine` and `listMachines`
+  now show it directly, which is what makes a `case DEAD` branch in caller code reachable rather
+  than dead.
 - **Both checkout formats derive their AES key with HKDF-SHA256** (`crypto.Hkdf`), with different,
   non-interchangeable parameters: license files use salt `tamga:license-file-key-v1` / `info`
   `license-file` (`Hkdf.deriveLicenseFileKey`); machine files use salt

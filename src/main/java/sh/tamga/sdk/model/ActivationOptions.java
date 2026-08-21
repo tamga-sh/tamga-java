@@ -43,12 +43,21 @@ public final class ActivationOptions {
    * activation's to give back. That differs from the create path, where the machine this call just
    * made is rolled back.
    *
-   * <p>Recovery is limited to the license being activated against. The lookup is filtered by that
-   * license id, so a fingerprint taken under a <em>different</em> license -- which a
-   * {@code UNIQUE_PER_POLICY} or {@code UNIQUE_PER_ACCOUNT} uniqueness strategy permits -- finds
-   * nothing and the original 409 is raised unchanged. A machine resource does not carry its
-   * license id, so a row found outside that filter could not be proven to belong to the right
-   * license, and returning it would be a guess.
+   * <p><b>Recovery is scoped to the license being activated against, and that is sufficient rather
+   * than merely safe.</b> All three uniqueness strategies raise the conflict on a predicate that
+   * includes the caller's own license rows -- {@code UNIQUE_PER_LICENSE} matches
+   * {@code license_id} directly, {@code UNIQUE_PER_POLICY} joins licenses on the caller's own
+   * {@code policy_id}, and {@code UNIQUE_PER_ACCOUNT} spans the account -- so a genuine
+   * re-activation of <em>this</em> license's machine produces {@code FINGERPRINT_TAKEN} under
+   * every strategy, and a license-filtered lookup finds it every time.
+   *
+   * <p>What a wider search would add is only the cross-license case, and that is the case the
+   * server is refusing on purpose: registering one fingerprint against several licenses is how a
+   * customer shares seats, which is exactly what the wider scopes exist to prevent. Returning
+   * another license's machine would leave the client pinging and checking out a machine its
+   * license does not own while its own machine count stayed at zero -- and since the resource
+   * carries no license id, nothing on the client side could detect that. So a fingerprint taken
+   * under a different license finds nothing here and the original 409 is raised unchanged.
    */
   public ActivationOptions reuseTakenFingerprint(boolean value) {
     return value == reuseTakenFingerprint ? this : new ActivationOptions(value);
