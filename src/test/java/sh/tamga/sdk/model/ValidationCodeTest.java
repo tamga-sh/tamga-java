@@ -13,7 +13,7 @@ class ValidationCodeTest {
   }
 
   @Test
-  void exactlyFourteenCodesAreReachable() {
+  void exactlySixteenCodesAreReachable() {
     long reachable = 0;
     for (ValidationCode code : ValidationCode.values()) {
       if (code.reachable()) {
@@ -21,20 +21,51 @@ class ValidationCodeTest {
       }
     }
 
-    assertThat(reachable).isEqualTo(14);
+    assertThat(reachable).isEqualTo(16);
+  }
+
+  @Test
+  void theTwoNewlyEnforcedScopeCodesAreReachable() {
+    // scope.entitlements and scope.fingerprint used to be parsed and ignored. They are now
+    // genuinely checked, so these two verdicts really do arrive.
+    assertThat(ValidationCode.ENTITLEMENTS_MISSING.reachable()).isTrue();
+    assertThat(ValidationCode.FINGERPRINT_SCOPE_MISMATCH.reachable()).isTrue();
   }
 
   @Test
   void unreachableCodesAreFlaggedAsSuch() {
-    // The handler returns a bare HTTP 404 rather than emitting NOT_FOUND, and the four scope
-    // fields these correspond to are parsed server-side but never checked.
+    // The handler returns a bare HTTP 404 rather than emitting NOT_FOUND. The version/checksum
+    // codes are unreachable for the opposite reason to before: setting either scope field now
+    // fails the whole call with 422 SCOPE_NOT_SUPPORTED, so no verdict is ever produced.
     assertThat(ValidationCode.NOT_FOUND.reachable()).isFalse();
     assertThat(ValidationCode.BANNED.reachable()).isFalse();
-    assertThat(ValidationCode.FINGERPRINT_SCOPE_MISMATCH.reachable()).isFalse();
     assertThat(ValidationCode.CHECKSUM_SCOPE_MISMATCH.reachable()).isFalse();
     assertThat(ValidationCode.VERSION_SCOPE_MISMATCH.reachable()).isFalse();
     assertThat(ValidationCode.COMPONENTS_SCOPE_MISMATCH.reachable()).isFalse();
     assertThat(ValidationCode.UNKNOWN.reachable()).isFalse();
+  }
+
+  @Test
+  void createTimeLimitCodesMapOntoTheValidationVocabulary() {
+    // POST /machines rejects with its own four names; validation reports the same four conditions
+    // under different ones. activateMachine reports one outcome, so the mapping has to exist.
+    assertThat(ValidationCode.fromMachineLimitErrorCode("MACHINE_LIMIT_EXCEEDED"))
+        .isEqualTo(ValidationCode.TOO_MANY_MACHINES);
+    assertThat(ValidationCode.fromMachineLimitErrorCode("CORE_LIMIT_EXCEEDED"))
+        .isEqualTo(ValidationCode.TOO_MANY_CORES);
+    assertThat(ValidationCode.fromMachineLimitErrorCode("MEMORY_LIMIT_EXCEEDED"))
+        .isEqualTo(ValidationCode.TOO_MUCH_MEMORY);
+    assertThat(ValidationCode.fromMachineLimitErrorCode("DISK_LIMIT_EXCEEDED"))
+        .isEqualTo(ValidationCode.TOO_MUCH_DISK);
+  }
+
+  @Test
+  void nonLimitErrorCodesMapToNothing() {
+    // FINGERPRINT_TAKEN is checked before the limits and is not one: translating it would report
+    // "buy more seats" for a machine that is already activated.
+    assertThat(ValidationCode.fromMachineLimitErrorCode("FINGERPRINT_TAKEN")).isNull();
+    assertThat(ValidationCode.fromMachineLimitErrorCode("UNAUTHORIZED")).isNull();
+    assertThat(ValidationCode.fromMachineLimitErrorCode(null)).isNull();
   }
 
   @Test

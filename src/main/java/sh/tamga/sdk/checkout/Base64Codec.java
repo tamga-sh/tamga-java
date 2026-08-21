@@ -3,7 +3,19 @@ package sh.tamga.sdk.checkout;
 import java.util.Base64;
 import sh.tamga.sdk.error.TamgaCheckoutException;
 
-/** Shared lenient-base64-decode helpers for {@link LicenseFile} and {@link MachineFile}. */
+/**
+ * Shared base64-decode helpers for {@link LicenseFile} and {@link MachineFile}: lenient in what
+ * they REPORT (a {@code null} return rather than an exception), strict in what they ACCEPT.
+ *
+ * <p><b>The strictness is load-bearing -- never swap {@link java.util.Base64#getDecoder()} for
+ * {@code getMimeDecoder()}.</b> A machine file's encrypted {@code enc} is
+ * {@code "<nonce_b64>.<ciphertext_b64>"}, and a 12-byte nonce always encodes to exactly 16 unpadded
+ * characters, so the two halves concatenated stay 4-aligned. A decoder that skips out-of-alphabet
+ * characters would therefore drop the {@code '.'} and silently reconstruct
+ * {@code nonce || ciphertext || tag} byte-for-byte -- reviving the single-blob misreading this SDK
+ * shipped for two years, and softening the nonce-length and tag-length guards built around it.
+ * {@code MachineFileTest.base64DecodingIsStrictSoJunkInsideEncIsRejectedNotIgnored} pins this.
+ */
 final class Base64Codec {
 
   private Base64Codec() {

@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -18,7 +21,7 @@ import org.junit.jupiter.api.Test;
 import sh.tamga.sdk.model.HeartbeatStatus;
 import sh.tamga.sdk.model.Machine;
 
-/** Heartbeat scheduling, including the dead-machine signal callers depend on. */
+/** Heartbeat scheduling, including the stale-heartbeat signal callers depend on. */
 class HeartbeatSchedulerTest {
 
   private MockWebServer server;
@@ -48,8 +51,30 @@ class HeartbeatSchedulerTest {
         .build());
   }
 
+  // Returns the counter once two readings 50ms apart agree, or the latest reading if it never
+  // settles within the timeout. In that second case the caller's follow-up assertion is what
+  // reports the failure: a timer that is genuinely still scheduling work keeps incrementing, so
+  // the value moves again during the caller's sleep and the equality check fails as intended.
+  // This distinguishes "one straggler drained" from "the timer is still alive", which is the
+  // property under test.
+  private static int awaitSettled(AtomicInteger counter) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    int previous = -1;
+    while (System.nanoTime() < deadline) {
+      int current = counter.get();
+      if (current == previous) {
+        return current;
+      }
+      previous = current;
+      Thread.sleep(50);
+    }
+    return counter.get();
+  }
+
   @Test
   void defaultIntervalIsThirdOfServerWindow() {
+    // 600s is the server's default machine window, applied when policy.heartbeat_duration is null;
+    // a policy that sets that field overrides it and the default interval does not follow.
     assertThat(HeartbeatScheduler.WINDOW).isEqualTo(Duration.ofSeconds(600));
     assertThat(HeartbeatScheduler.DEFAULT_INTERVAL).isEqualTo(Duration.ofSeconds(200));
     assertThat(ProcessHeartbeatScheduler.WINDOW).isEqualTo(Duration.ofSeconds(30));
@@ -80,8 +105,89 @@ class HeartbeatSchedulerTest {
         .build()
         .tick();
 
-    // DEAD means the row was culled server-side: the caller must re-activate, not keep pinging.
+    // DEAD only reports that the last ping was older than the window -- it says nothing about
+    // whether the row still exists, and the ping that observed it has already revived it. The
+    // callback is the only place a caller can see the staleness at all, so it must not be hidden.
     assertThat(seen.get()).isEqualTo(HeartbeatStatus.DEAD);
+  }
+
+  @Test
+  void unexpectedStatusIsCarriedNotRaisedAsError() {
+    // Synthetic status: the real ping-heartbeat endpoint cannot answer DEAD, since it writes
+    // last_heartbeat_at = NOW() before deriving the status from that same timestamp. What this
+    // pins is the routing rule, which is real: any 200 carrying a machine leaves `error` null
+    // whatever the status, so re-activation hangs off a 404 and never off a status value.
+    enqueueMachine("DEAD");
+    AtomicReference<Machine> machineSeen = new AtomicReference<>();
+    AtomicReference<Throwable> errorSeen = new AtomicReference<>();
+
+    HeartbeatScheduler.builder(client, "mach-1")
+        .onTick((machine, error) -> {
+          machineSeen.set(machine);
+          errorSeen.set(error);
+        })
+        .build()
+        .tick();
+
+    assertThat(machineSeen.get()).isNotNull();
+    assertThat(machineSeen.get().heartbeatStatus()).isEqualTo(HeartbeatStatus.DEAD);
+    assertThat(errorSeen.get()).isNull();
+  }
+
+  @Test
+  void noHeartbeatStatusEndsTheLoopNotEvenDead() throws Exception {
+    // Regression: the loop must not stop on any status. DEAD stands in here for an unexpected
+    // status -- the real ping-heartbeat endpoint cannot produce it, because it writes
+    // last_heartbeat_at = NOW() and then derives the status from that same timestamp, so it
+    // always answers ALIVE or RESURRECTED. The defensive property being pinned is real
+    // regardless: a loop that stops, returns or short-circuits on a status it did not expect
+    // strands a machine that was one ping away from ALIVE, and tamga-python shipped exactly that
+    // bug. Three such readings in a row must not perturb the timer at all, and the fourth ping
+    // must land and come back ALIVE.
+    for (int i = 0; i < 3; i++) {
+      enqueueMachine("DEAD");
+    }
+    for (int i = 0; i < 20; i++) {
+      enqueueMachine("ALIVE");
+    }
+    List<HeartbeatStatus> seen = Collections.synchronizedList(new ArrayList<>());
+    CountDownLatch fourTicks = new CountDownLatch(4);
+
+    // MINIMUM_INTERVAL, not a faster number: the one-second floor means no interval a test can
+    // ask for ticks quicker than this, so four ticks is four seconds of real time. Stating the
+    // constant keeps the test honest about why it takes that long -- a literal 40ms here would
+    // silently be clamped to the same second and read as a mystery.
+    HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, "mach-1")
+        .interval(HeartbeatScheduler.MINIMUM_INTERVAL)
+        .onTick((machine, error) -> {
+          seen.add(machine == null ? null : machine.heartbeatStatus());
+          fourTicks.countDown();
+        })
+        .build();
+    scheduler.start();
+
+    assertThat(fourTicks.await(30, TimeUnit.SECONDS)).isTrue();
+    assertThat(scheduler.running()).isTrue();
+    scheduler.stop();
+
+    // Snapshot under the list's own monitor before asserting. Collections.synchronizedList only
+    // synchronizes individual mutations; iterating one -- which is what containsExactly does, and
+    // a subList view inherits the backing list's modCount besides -- requires the caller to hold
+    // that monitor. stop() interrupts the timer but a tick already blocked in its HTTP call still
+    // runs to completion and still adds, so asserting against the live list raced that add and
+    // threw ConcurrentModificationException on three of six CI runners.
+    List<HeartbeatStatus> snapshot;
+    synchronized (seen) {
+      snapshot = new ArrayList<>(seen);
+    }
+
+    // Assert a floor and the first four, never an exact size. The property is that no status ends
+    // the loop, so a fifth tick is not a failure -- it is more evidence the loop kept running.
+    // Demanding exactly four would couple the test to scheduling luck rather than to the property.
+    assertThat(snapshot).hasSizeGreaterThanOrEqualTo(4);
+    assertThat(snapshot.subList(0, 4)).containsExactly(HeartbeatStatus.DEAD, HeartbeatStatus.DEAD,
+        HeartbeatStatus.DEAD, HeartbeatStatus.ALIVE);
+    assertThat(server.getRequestCount()).isGreaterThanOrEqualTo(4);
   }
 
   @Test
@@ -122,13 +228,13 @@ class HeartbeatSchedulerTest {
     CountDownLatch ticked = new CountDownLatch(2);
 
     HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, "mach-1")
-        .interval(Duration.ofMillis(40))
+        .interval(HeartbeatScheduler.MINIMUM_INTERVAL)
         .onTick((machine, error) -> ticked.countDown())
         .build();
     scheduler.start();
 
     assertThat(scheduler.running()).isTrue();
-    assertThat(ticked.await(10, TimeUnit.SECONDS)).isTrue();
+    assertThat(ticked.await(30, TimeUnit.SECONDS)).isTrue();
 
     scheduler.stop();
     assertThat(scheduler.running()).isFalse();
@@ -165,7 +271,7 @@ class HeartbeatSchedulerTest {
     }
     AtomicInteger ticks = new AtomicInteger();
     HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, "mach-1")
-        .interval(Duration.ofMillis(10))
+        .interval(HeartbeatScheduler.MINIMUM_INTERVAL)
         .onTick((machine, error) -> ticks.incrementAndGet())
         .build();
 
@@ -198,9 +304,19 @@ class HeartbeatSchedulerTest {
     scheduler.stop();
     assertThat(scheduler.running()).isFalse();
 
-    // A stopped scheduler must actually be stopped: the tick count has to settle.
-    int settled = ticks.get();
-    Thread.sleep(150);
+    // A stopped scheduler must actually be stopped: the tick count has to settle. Read it only
+    // once it has stopped moving -- same in-flight-tick race as the test above, in counter form.
+    // stop() interrupts the timer, but a tick already inside its HTTP call still completes and
+    // still increments, so snapshotting the instant stop() returns could catch that straggler
+    // landing during the sleep and fail on a drained scheduler that is behaving correctly.
+    //
+    // The observation window has to OUTLAST the interval, and since the one-second floor landed
+    // that is a second rather than the 10ms this test used to run at. A leaked timer's first tick
+    // is now a whole second away, so the old 150ms sleep would have watched a genuinely leaked
+    // scheduler sit silently and called it stopped -- the regression this test exists for would
+    // have walked straight through it. Sleeping past the floor is what keeps it a real check.
+    int settled = awaitSettled(ticks);
+    Thread.sleep(HeartbeatScheduler.MINIMUM_INTERVAL.toMillis() + 500);
     assertThat(ticks.get()).isEqualTo(settled);
   }
 
@@ -281,11 +397,11 @@ class HeartbeatSchedulerTest {
     CountDownLatch ticked = new CountDownLatch(2);
 
     try (ProcessHeartbeatScheduler scheduler = ProcessHeartbeatScheduler.builder(client, "proc-1")
-        .interval(Duration.ofMillis(40))
+        .interval(HeartbeatScheduler.MINIMUM_INTERVAL)
         .onTick((process, error) -> ticked.countDown())
         .build()) {
       scheduler.start();
-      assertThat(ticked.await(10, TimeUnit.SECONDS)).isTrue();
+      assertThat(ticked.await(30, TimeUnit.SECONDS)).isTrue();
     }
   }
 

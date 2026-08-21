@@ -74,6 +74,22 @@ public class TamgaApiException extends RuntimeException {
         return new SchemeNotSupportedException(error, httpStatus, responseMetadata);
       case "DATASET_INVALID":
         return new DatasetInvalidException(error, httpStatus, responseMetadata);
+      case "MACHINE_LIMIT_EXCEEDED":
+        return new MachineLimitExceededException(error, httpStatus, responseMetadata);
+      case "CORE_LIMIT_EXCEEDED":
+        return new CoreLimitExceededException(error, httpStatus, responseMetadata);
+      case "MEMORY_LIMIT_EXCEEDED":
+        return new MemoryLimitExceededException(error, httpStatus, responseMetadata);
+      case "DISK_LIMIT_EXCEEDED":
+        return new DiskLimitExceededException(error, httpStatus, responseMetadata);
+      case "TOO_MANY_PROCESSES":
+        return new TooManyProcessesException(error, httpStatus, responseMetadata);
+      case "LICENSE_SUSPENDED":
+        return new LicenseSuspendedException(error, httpStatus, responseMetadata);
+      case "LICENSE_EXPIRED":
+        return new LicenseExpiredException(error, httpStatus, responseMetadata);
+      case "LICENSE_NOT_ALLOWED":
+        return new LicenseNotAllowedException(error, httpStatus, responseMetadata);
       default:
         return new TamgaApiException(error, httpStatus, responseMetadata);
     }
@@ -221,6 +237,124 @@ public class TamgaApiException extends RuntimeException {
     private static final long serialVersionUID = 1L;
 
     DatasetInvalidException(TamgaError error, int status, ResponseMetadata metadata) {
+      super(error, status, metadata);
+    }
+  }
+
+  /**
+   * The license is already at its machine limit. HTTP 422, raised by {@code POST /machines}.
+   *
+   * <p>Machine creation <b>does</b> enforce the policy's limits, and it does so through the
+   * policy's overage strategy: under {@code ALLOW_ACCESS} or {@code ALLOW_1_25X_OVERAGE} the
+   * create still succeeds and the limit only surfaces at validate. So this is one of two ways an
+   * over-limit activation is reported, not the only one --
+   * {@code TamgaClient.activateMachine} normalizes both into
+   * {@link TamgaMachineOverLimitException}.
+   */
+  public static final class MachineLimitExceededException extends TamgaApiException {
+    private static final long serialVersionUID = 1L;
+
+    MachineLimitExceededException(TamgaError error, int status, ResponseMetadata metadata) {
+      super(error, status, metadata);
+    }
+  }
+
+  /**
+   * The license is already at its CPU-core limit. HTTP 422, raised by {@code POST /machines} when
+   * the machine's reported {@code cores} would push the license past {@code policy.max_cores}.
+   */
+  public static final class CoreLimitExceededException extends TamgaApiException {
+    private static final long serialVersionUID = 1L;
+
+    CoreLimitExceededException(TamgaError error, int status, ResponseMetadata metadata) {
+      super(error, status, metadata);
+    }
+  }
+
+  /**
+   * The license is already at its memory limit. HTTP 422, raised by {@code POST /machines}.
+   *
+   * <p>The reported {@code memory} is in <b>megabytes</b>. Reporting bytes inflates the license's
+   * running total by a factor of about a million and makes this the response to the next
+   * activation.
+   */
+  public static final class MemoryLimitExceededException extends TamgaApiException {
+    private static final long serialVersionUID = 1L;
+
+    MemoryLimitExceededException(TamgaError error, int status, ResponseMetadata metadata) {
+      super(error, status, metadata);
+    }
+  }
+
+  /**
+   * The license is already at its disk limit. HTTP 422, raised by {@code POST /machines}. The
+   * reported {@code disk} is in <b>megabytes</b> -- see {@link MemoryLimitExceededException}.
+   */
+  public static final class DiskLimitExceededException extends TamgaApiException {
+    private static final long serialVersionUID = 1L;
+
+    DiskLimitExceededException(TamgaError error, int status, ResponseMetadata metadata) {
+      super(error, status, metadata);
+    }
+  }
+
+  /**
+   * The machine is already at the policy's process limit. HTTP 422, raised by
+   * {@code POST /processes}.
+   *
+   * <p>Nothing on the server reclaims a process row: the reaper is not scheduled, so a process
+   * that crashed without being deleted holds its slot indefinitely.
+   */
+  public static final class TooManyProcessesException extends TamgaApiException {
+    private static final long serialVersionUID = 1L;
+
+    TooManyProcessesException(TamgaError error, int status, ResponseMetadata metadata) {
+      super(error, status, metadata);
+    }
+  }
+
+  /**
+   * The license is suspended and cannot authenticate. HTTP 401, raised at the front door for
+   * license-key credentials regardless of policy.
+   *
+   * <p>Not retryable and not a transport problem: no number of retries un-suspends a license.
+   */
+  public static final class LicenseSuspendedException extends TamgaApiException {
+    private static final long serialVersionUID = 1L;
+
+    LicenseSuspendedException(TamgaError error, int status, ResponseMetadata metadata) {
+      super(error, status, metadata);
+    }
+  }
+
+  /**
+   * The license has expired and its policy refuses to authenticate it. HTTP 401.
+   *
+   * <p>Only {@code REVOKE_ACCESS} produces this. Under {@code RESTRICT_ACCESS} (the default),
+   * {@code MAINTAIN_ACCESS} and {@code ALLOW_ACCESS} an expired license still authenticates and
+   * the expiry surfaces as the {@code EXPIRED} validation code instead -- which is the difference
+   * between "you keep what you paid for" and "you are locked out".
+   */
+  public static final class LicenseExpiredException extends TamgaApiException {
+    private static final long serialVersionUID = 1L;
+
+    LicenseExpiredException(TamgaError error, int status, ResponseMetadata metadata) {
+      super(error, status, metadata);
+    }
+  }
+
+  /**
+   * License-key authentication is not permitted by the license's policy. HTTP 401.
+   *
+   * <p><b>A configuration precondition, not a transient failure.</b> The policy's
+   * {@code authentication_strategy} must be {@code LICENSE} or {@code MIXED}; the column defaults
+   * to {@code TOKEN}, and {@code NONE} is refused the same way. Retrying, or asking the user to
+   * re-enter their key, cannot fix it -- the policy has to be changed.
+   */
+  public static final class LicenseNotAllowedException extends TamgaApiException {
+    private static final long serialVersionUID = 1L;
+
+    LicenseNotAllowedException(TamgaError error, int status, ResponseMetadata metadata) {
       super(error, status, metadata);
     }
   }

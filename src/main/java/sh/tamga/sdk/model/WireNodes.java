@@ -52,6 +52,15 @@ final class WireNodes {
     return value == null ? 0 : value;
   }
 
+  /**
+   * Reads a boolean that is genuinely absent on some responses, so "not sent" stays distinct from
+   * "sent as false". Use {@link #bool} where the server always sends the field.
+   */
+  static Boolean booleanOrNull(JsonNode parent, String field) {
+    JsonNode node = parent == null ? null : parent.get(field);
+    return node == null || node.isNull() || !node.isBoolean() ? null : node.asBoolean();
+  }
+
   static boolean bool(JsonNode parent, String field) {
     JsonNode node = parent == null ? null : parent.get(field);
     return node != null && node.asBoolean(false);

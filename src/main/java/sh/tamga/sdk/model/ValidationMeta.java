@@ -26,6 +26,17 @@ public final class ValidationMeta {
   }
 
   /**
+   * Builds a meta from already-known values, for the one case where a verdict is reached without a
+   * validation response: a machine creation rejected by the server's own limit check.
+   *
+   * <p>{@code ts} is the moment the verdict was reached locally, not a server timestamp, and is
+   * allowed to be {@code null}.
+   */
+  public static ValidationMeta of(Instant ts, boolean valid, String detail, ValidationCode code) {
+    return new ValidationMeta(ts, valid, detail, code == null ? ValidationCode.UNKNOWN : code);
+  }
+
+  /**
    * Decodes a validation meta object. Accepts both the {@code meta} block of a JSON:API validation
    * response and quick-validate's flat top-level body, which have the same four fields.
    */

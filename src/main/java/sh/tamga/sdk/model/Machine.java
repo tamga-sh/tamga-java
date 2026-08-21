@@ -110,17 +110,51 @@ public final class Machine {
     return cores;
   }
 
-  /** Returns the machine's reported memory in bytes, or {@code null}. */
+  /**
+   * Returns the machine's reported memory in <b>megabytes</b>, or {@code null}.
+   *
+   * <p>Not bytes. The column is documented as megabytes server-side and feeds the license's
+   * {@code machines_memory_count}, which the policy's memory limit is checked against at
+   * activation.
+   */
   public Long memory() {
     return memory;
   }
 
-  /** Returns the machine's reported disk in bytes, or {@code null}. */
+  /** Returns the machine's reported disk in <b>megabytes</b>, or {@code null}. Not bytes. */
   public Long disk() {
     return disk;
   }
 
-  /** Returns when the next heartbeat is expected, or {@code null}. */
+  /**
+   * Returns when the next heartbeat is expected, or {@code null}.
+   *
+   * <p><b>Whether this reflects the real policy window depends on which call produced the
+   * machine.</b> The server derives the field from the heartbeat window joined onto the machine
+   * row, and only some routes perform that join:
+   *
+   * <table border="1">
+   *   <caption>What each route's {@code next_heartbeat_at} is measured against</caption>
+   *   <tr><th>Route</th><th>Window used</th></tr>
+   *   <tr><td>{@code GET /machines/{id}}, {@code GET /machines}</td>
+   *       <td>the policy's {@code heartbeat_duration}</td></tr>
+   *   <tr><td>{@code POST /machines/{id}/actions/check-out}</td>
+   *       <td>the policy's {@code heartbeat_duration}</td></tr>
+   *   <tr><td>{@code POST /machines/{id}/actions/generate-offline-proof}</td>
+   *       <td>the policy's {@code heartbeat_duration}</td></tr>
+   *   <tr><td>{@code POST /machines} (create/activate)</td><td>the 600-second fallback</td></tr>
+   *   <tr><td>{@code POST /machines/{id}/actions/ping-heartbeat}</td>
+   *       <td>the 600-second fallback</td></tr>
+   *   <tr><td>{@code POST /machines/{id}/actions/reset-heartbeat}</td>
+   *       <td>the 600-second fallback</td></tr>
+   *   <tr><td>{@code PATCH /machines/{id}}</td><td>the 600-second fallback</td></tr>
+   * </table>
+   *
+   * <p>Subtracting {@link #lastHeartbeatAt()} from this field recovers the effective window on the
+   * first group only, and nothing on the wire says which group a given response came from. Do not
+   * size a ping interval from it -- read the policy instead, through
+   * {@code TamgaClient.getLicensePolicy}.
+   */
   public Instant nextHeartbeatAt() {
     return nextHeartbeatAt;
   }
@@ -202,6 +236,61 @@ public final class Machine {
       throw new IOException("Machine resource payload is empty.");
     }
     return fromResource(payload.data());
+  }
+
+  /**
+   * As {@link #parseResourcePayload(byte[])}, also returning the claims that were signed alongside
+   * the resource.
+   *
+   * <p>Machine files carry the same {@code {"data": ..., "meta": {iat, exp, jti, kid}}} envelope
+   * license files do -- the server builds both from one {@code LicenseFileClaims} struct. Earlier
+   * revisions of this SDK stated machine files carried no claims; they do, and an unread {@code
+   * exp} is an offline file that verifies forever.
+   *
+   * @throws IOException if the payload is malformed, or carries no {@code meta} claims -- i.e. it
+   *     is a pre-v2 file. That is the second line of defence behind the {@code alg} gate: a file
+   *     must not reach the expiry check with nothing to check.
+   */
+  public static MachineWithClaims parseResourcePayloadWithClaims(byte[] json) throws IOException {
+    JsonApiPayload<Attributes> payload =
+        TamgaJsonMapper.instance().readValue(json, new TypeReference<JsonApiPayload<Attributes>>() {
+        });
+    if (payload == null) {
+      throw new IOException("Machine resource payload is empty.");
+    }
+    if (payload.meta() == null) {
+      throw new IOException(
+          "Machine file payload is missing the signed 'meta' claims (this looks like a pre-v2"
+              + " file).");
+    }
+    return new MachineWithClaims(fromResource(payload.data()), payload.meta());
+  }
+
+  /** A machine plus the claims that were covered by its file's signature. */
+  public static final class MachineWithClaims {
+    private final Machine machine;
+    private final LicenseFileClaims claims;
+
+    MachineWithClaims(Machine machine, LicenseFileClaims claims) {
+      this.machine = machine;
+      this.claims = claims;
+    }
+
+    /** The machine the file describes. */
+    public Machine machine() {
+      return machine;
+    }
+
+    /**
+     * The signed {@code iat}/{@code exp}/{@code jti}/{@code kid}.
+     *
+     * <p>GOTCHA: {@code kid} is derived server-side from the account's <em>Ed25519</em> public key
+     * even when the file was signed with RSA or ECDSA, so it does not identify the actual signing
+     * key for those schemes. Do not build key selection on it.
+     */
+    public LicenseFileClaims claims() {
+      return claims;
+    }
   }
 
   private static Machine fromResource(JsonApiResource<Attributes> resource) throws IOException {

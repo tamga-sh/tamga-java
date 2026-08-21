@@ -15,6 +15,10 @@ import java.util.Objects;
  * <p>{@link #code()} is the stable, developer-facing identifier and is what
  * {@code TamgaClient.hasEntitlement} matches on. {@link #name()} is a display label that may
  * collide or change independently -- never match on it.
+ *
+ * <p>The license listing is a union of directly attached and policy-inherited entitlements, and
+ * {@link #inherited()} says which. Only that listing carries the flag; the account-, policy- and
+ * release-scoped responses have nothing to inherit from and leave it {@code null}.
  */
 public final class Entitlement {
 
@@ -24,15 +28,17 @@ public final class Entitlement {
   private final Instant created;
   private final Instant updated;
   private final Map<String, Object> metadata;
+  private final Boolean inherited;
 
   Entitlement(String id, String name, String code, Instant created, Instant updated,
-      Map<String, Object> metadata) {
+      Map<String, Object> metadata, Boolean inherited) {
     this.id = id;
     this.name = name;
     this.code = code;
     this.created = created;
     this.updated = updated;
     this.metadata = metadata;
+    this.inherited = inherited;
   }
 
   /** Decodes a single {@code {id, type, attributes}} entitlement resource node. */
@@ -47,7 +53,8 @@ public final class Entitlement {
         WireNodes.text(attrs, "code"),
         WireNodes.instant(attrs, "created"),
         WireNodes.instant(attrs, "updated"),
-        WireNodes.objectMap(attrs, "metadata"));
+        WireNodes.objectMap(attrs, "metadata"),
+        WireNodes.booleanOrNull(attrs, "inherited"));
   }
 
   /** Returns the entitlement's unique id. */
@@ -78,6 +85,20 @@ public final class Entitlement {
   /** Returns an unmodifiable view of arbitrary metadata, or {@code null}. */
   public Map<String, Object> metadata() {
     return metadata == null ? null : Collections.unmodifiableMap(metadata);
+  }
+
+  /**
+   * Returns whether the license holds this entitlement through its policy rather than directly, or
+   * {@code null} on a response that does not carry the flag.
+   *
+   * <p>Two consequences of {@code true}: the entitlement cannot be detached from the license
+   * (detaching answers {@code 403 POLICY_ENTITLEMENT}, attaching it directly answers
+   * {@code 422 ENTITLEMENT_ALREADY_INHERITED}), and
+   * {@code TamgaClient.getEntitlement} answers <b>404</b> for it -- that route resolves direct
+   * attachments only. List-then-get-each is not a valid pattern on this resource.
+   */
+  public Boolean inherited() {
+    return inherited;
   }
 
   @Override

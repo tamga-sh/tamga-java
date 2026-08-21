@@ -67,8 +67,8 @@ public final class Transport {
    * <p>Without a cap, a compromised or hostile endpoint can drive the embedding application into
    * an {@code OutOfMemoryError} simply by answering with a very large or chunked body. The call
    * timeout bounds how long a response may take, not how large it may be, and a fast connection
-   * delivers a great deal inside 30 seconds. This applies to error bodies too, which are read
-   * before any credential has necessarily been accepted.
+   * delivers a great deal inside the default 45-second call timeout. This applies to error bodies
+   * too, which are read before any credential has necessarily been accepted.
    *
    * <p>32 MiB is far above any legitimate response: the largest thing this API returns is a
    * checkout certificate measured in kilobytes.
@@ -85,12 +85,19 @@ public final class Transport {
    * <p>Creates are deliberately absent. Retrying {@code POST /machines} risks a second activation
    * burning a second seat, and only the caller knows whether that is acceptable.
    *
-   * <p>Matching is by suffix, not substring. {@code ping-heartbeat} and {@code reset-heartbeat}
-   * therefore do <b>not</b> match {@code /actions/ping} -- only a process ping does.
+   * <p>Matching is by suffix, not substring, so each heartbeat action is listed in its own right.
+   * {@code /actions/ping-heartbeat} does not end with {@code /actions/ping} -- that suffix only
+   * matches a process ping -- and leaving it out meant a throttled heartbeat was dropped silently
+   * and the machine went on to read {@code DEAD} (which is a staleness report, not a cull -- see
+   * {@link HeartbeatScheduler}). Both heartbeat writes are bare
+   * {@code SET last_heartbeat_at = NOW()} updates: repeating one cannot burn a seat or double
+   * anything, and the rate limiter buckets per route pattern, so a whole fleet shares one budget
+   * on exactly these paths and 429s them for each other.
    */
   private static final List<String> RETRYABLE_POST_SUFFIXES = Collections.unmodifiableList(
       Arrays.asList("/actions/validate", "/actions/validate-key", "/actions/check-in",
-          "/actions/check-out", "/actions/ping"));
+          "/actions/check-out", "/actions/ping", "/actions/ping-heartbeat",
+          "/actions/reset-heartbeat"));
 
   private final OkHttpClient httpClient;
   private final HttpUrl baseUrl;
@@ -218,9 +225,16 @@ public final class Transport {
    * <p>Segments are added individually so each is percent-encoded on its own. Never build a path by
    * string concatenation: a caller-supplied id containing {@code /} or {@code ..} would otherwise
    * change which endpoint is called.
+   *
+   * <p>{@code accountScoped} chooses the prefix. Almost every route lives under
+   * {@code /v1/accounts/{accountId}}, and building that prefix unconditionally is exactly why no
+   * SDK in this fleet could reach {@code /v1/health}, which sits at the origin root. The flag is
+   * how a route escapes the account prefix without any caller being able to construct an arbitrary
+   * URL: the segments still come from this class's own callers, never from the network.
    */
-  private HttpUrl.Builder urlFor(List<String> segments, Map<String, String> query) {
-    HttpUrl.Builder builder = accountUrl();
+  private HttpUrl.Builder urlFor(List<String> segments, Map<String, String> query,
+      boolean accountScoped) {
+    HttpUrl.Builder builder = accountScoped ? accountUrl() : baseUrl.newBuilder();
     for (String segment : segments) {
       builder.addPathSegment(segment);
     }
@@ -244,21 +258,65 @@ public final class Transport {
   }
 
   JsonNode getJson(List<String> segments, Map<String, String> query) {
-    return jsonResponse(send("GET", segments, query, null, CONTENT_TYPE_JSON_API));
+    return jsonResponse(send("GET", segments, query, null, CONTENT_TYPE_JSON_API, true));
+  }
+
+  /**
+   * Issues a {@code GET} against a path that is <b>not</b> under {@code /v1/accounts/{accountId}},
+   * accepting plain JSON.
+   *
+   * <p>Exactly one route needs this today: {@code GET /v1/health}, which is public, bypasses the
+   * host-header check, and answers a bare {@code {status, version, uptime_secs}} object rather
+   * than a JSON:API document. Credentials are still attached, per this SDK's rule that they are
+   * sent even where the server does not require them.
+   */
+  JsonNode getRootJson(List<String> segments, Map<String, String> query) {
+    return jsonResponse(send("GET", segments, query, null, "application/json", false));
+  }
+
+  /**
+   * Issues a {@code GET} whose {@code 204 No Content} answer is a meaningful outcome rather than
+   * an anomaly, returning {@code null} for it.
+   *
+   * <p>{@link #getJson} folds an empty body into an empty object, which is right for a response
+   * that should have had content and is exactly wrong for the upgrade check, where {@code 204} is
+   * the answer. Distinguishing them here is what lets a caller tell "no release was offered" from
+   * "a release arrived that would not decode" -- the second must be an error, and a shared
+   * empty-object return would have made the two identical.
+   */
+  JsonNode getJsonOrNoContent(List<String> segments, Map<String, String> query) {
+    try (Response response = send("GET", segments, query, null, CONTENT_TYPE_JSON_API, true)) {
+      throwIfError(response);
+      return response.code() == 204 ? null : decodeJson(bodyBytes(response));
+    }
   }
 
   JsonNode postJson(List<String> segments, Object body) {
-    return jsonResponse(send("POST", segments, null, body, CONTENT_TYPE_JSON_API));
+    return jsonResponse(send("POST", segments, null, body, CONTENT_TYPE_JSON_API, true));
+  }
+
+  /**
+   * Issues a {@code PATCH} with a JSON:API body.
+   *
+   * <p>Not retried after a {@code 429}: {@link #isRetryable} covers {@code GET} and a fixed list of
+   * {@code POST} action suffixes, and adding a third verb to that list is a decision about
+   * idempotence that belongs with the endpoint, not the transport. The one {@code PATCH} this SDK
+   * sends merges with {@code COALESCE} server-side and would in fact be safe to repeat, which is
+   * not a good enough reason to widen a rule that currently cannot let a create through.
+   */
+  JsonNode patchJson(List<String> segments, Object body) {
+    return jsonResponse(send("PATCH", segments, null, body, CONTENT_TYPE_JSON_API, true));
   }
 
   void deleteNoContent(List<String> segments) {
-    try (Response response = send("DELETE", segments, null, null, CONTENT_TYPE_JSON_API)) {
+    try (Response response = send("DELETE", segments, null, null, CONTENT_TYPE_JSON_API, true)) {
       throwIfError(response);
     }
   }
 
   String getText(List<String> segments, Map<String, String> query) {
-    try (Response response = send("GET", segments, query, null, "application/octet-stream")) {
+    try (Response response =
+        send("GET", segments, query, null, "application/octet-stream", true)) {
       throwIfError(response);
       return new String(bodyBytes(response), StandardCharsets.UTF_8);
     }
@@ -267,26 +325,30 @@ public final class Transport {
   private JsonNode jsonResponse(Response response) {
     try (Response open = response) {
       throwIfError(open);
-      byte[] bytes = bodyBytes(open);
-      if (bytes.length == 0) {
-        return TamgaJsonMapper.instance().createObjectNode();
-      }
-      try {
-        return TamgaJsonMapper.instance().readTree(bytes);
-      } catch (IOException e) {
-        throw new TamgaTransportException("Server returned a body that is not valid JSON.", e);
-      }
+      return decodeJson(bodyBytes(open));
     }
   }
 
+  private static JsonNode decodeJson(byte[] bytes) {
+    if (bytes.length == 0) {
+      return TamgaJsonMapper.instance().createObjectNode();
+    }
+    try {
+      return TamgaJsonMapper.instance().readTree(bytes);
+    } catch (IOException e) {
+      throw new TamgaTransportException("Server returned a body that is not valid JSON.", e);
+    }
+  }
+
+  @SuppressWarnings("checkstyle:ParameterNumber")
   private Response send(String method, List<String> segments, Map<String, String> query,
-      Object body, String accept) {
+      Object body, String accept, boolean accountScoped) {
     byte[] encodedBody = encodeBody(body);
     String path = pathOf(segments);
     boolean retryable = isRetryable(method, path);
 
     for (int attempt = 0; ; attempt++) {
-      Request request = buildRequest(method, segments, query, encodedBody, accept);
+      Request request = buildRequest(method, segments, query, encodedBody, accept, accountScoped);
       Response response;
       try {
         response = httpClient.newCall(request).execute();
@@ -312,8 +374,9 @@ public final class Transport {
     }
   }
 
+  @SuppressWarnings("checkstyle:ParameterNumber")
   private Request buildRequest(String method, List<String> segments, Map<String, String> query,
-      byte[] encodedBody, String accept) {
+      byte[] encodedBody, String accept, boolean accountScoped) {
     Request.Builder requestBuilder = new Request.Builder();
 
     // Content-Type is set only when there is a body, so a bodyless POST does not advertise a
@@ -333,7 +396,7 @@ public final class Transport {
       requestBuilder.header("Tamga-OTP", otp);
     }
 
-    HttpUrl.Builder urlBuilder = urlFor(segments, query);
+    HttpUrl.Builder urlBuilder = urlFor(segments, query, accountScoped);
     auth.apply(urlBuilder, requestBuilder);
     return requestBuilder.url(urlBuilder.build()).build();
   }

@@ -8,18 +8,52 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import sh.tamga.sdk.model.HeartbeatStatus;
 import sh.tamga.sdk.model.Machine;
+import sh.tamga.sdk.model.Policy;
 
 /**
  * Pings a machine's heartbeat on a timer.
  *
- * <p>The server's heartbeat window is a <b>hardcoded 600 seconds</b>, not driven by the policy's
- * {@code heartbeat_duration} despite that field existing. {@link #DEFAULT_INTERVAL} is a third of
- * the window, which tolerates two consecutive failed pings before the machine goes dead.
+ * <p>The server's heartbeat window is the policy's {@code heartbeat_duration} when that field is
+ * set, and 600 seconds only when it is null. {@link #DEFAULT_INTERVAL} is a third of that 600s
+ * fallback, which tolerates two consecutive failed pings before the machine's window lapses --
+ * on a policy that leaves {@code heartbeat_duration} unset.
+ *
+ * <p><b>The default interval does not adapt to a shorter policy window.</b> On a policy whose
+ * {@code heartbeat_duration} is below 600 seconds the default ping rate is too slow and the
+ * machine goes {@link HeartbeatStatus#DEAD} between pings -- server-side state, not something the
+ * ping response ever shows.
+ *
+ * <p><b>Read the policy and size the interval from it.</b> {@link TamgaClient#getLicensePolicy}
+ * returns the policy a license runs under, and {@link Builder#policy(Policy)} turns its
+ * {@link Policy#effectiveHeartbeatWindow()} into an interval:
+ *
+ * <pre>{@code
+ * HeartbeatScheduler.builder(client, machineId)
+ *     .policy(client.getLicensePolicy(licenseId))
+ *     .build();
+ * }</pre>
+ *
+ * <p>Whatever route sets it, the interval is floored at {@link #MINIMUM_INTERVAL}: a window short
+ * enough that a third of it lands under a second yields a one-second ping instead. See that
+ * constant for why the floor is on the ping rate rather than on the periods the timer happens to
+ * reject.
+ *
+ * <p>Note it is {@code getLicensePolicy}, not {@code getPolicy}: the standalone policy read wants
+ * the {@code policy.read} permission, which a license-key credential does not hold, while the
+ * nested one is authorised as a license read and works. Do <em>not</em> try to recover the window
+ * from a ping instead -- {@link Machine#nextHeartbeatAt()} carries the true value only on the
+ * checkout-family responses and the 600-second fallback everywhere else, with nothing on the wire
+ * to say which one arrived. See that method. {@link TamgaClient#updateMachine} is on the wrong
+ * side of that split too: it is a write, but one that reports the 600-second fallback and can
+ * still answer {@link HeartbeatStatus#DEAD}, so nothing it returns is usable for sizing either.
  *
  * <pre>{@code
  * HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, machineId)
  *     .onTick((machine, error) -> {
- *       if (machine != null && machine.heartbeatStatus() == HeartbeatStatus.DEAD) {
+ *       // Do not branch on the status to stop the loop. A ping answers ALIVE or RESURRECTED and
+ *       // nothing else, so a `== DEAD` branch here would simply be dead code (see below).
+ *       // A 404 is the only signal that the row is actually gone. Re-activate off that.
+ *       if (error instanceof TamgaApiException.NotFoundException) {
  *         reactivate();
  *       }
  *     })
@@ -27,20 +61,123 @@ import sh.tamga.sdk.model.Machine;
  * scheduler.start();
  * }</pre>
  *
- * <p><b>Handle the tick callback.</b> It is the only way to observe the machine going
- * {@link HeartbeatStatus#DEAD}, which means the row was culled server-side and the correct response
- * is to re-activate, not to keep pinging. Errors are reported rather than swallowed for the same
- * reason.
+ * <p><b>Never stop the loop on a status -- any status.</b> The only terminal signal from a ping
+ * is a 404. This scheduler never gates a tick on the previous outcome, and stopping is what would
+ * actually lose the machine: a stale machine is always one successful ping away from
+ * {@link HeartbeatStatus#ALIVE} again, because the ping write is a bare
+ * {@code SET last_heartbeat_at = NOW()} with no resurrection check.
+ *
+ * <p><b>A ping response can never say {@link HeartbeatStatus#DEAD}.</b> The endpoint writes
+ * {@code last_heartbeat_at = NOW()} and then derives {@code heartbeat_status} from that same
+ * timestamp, so the age it measures is ~0 and the answer is always {@code ALIVE} or
+ * {@code RESURRECTED}. Earlier guidance here framed the keep-pinging rule around "a {@code DEAD}
+ * reading from a ping" -- an observation that cannot occur on this route. The rule is right; that
+ * premise was not.
+ *
+ * <p><b>{@code DEAD} is still a real server state</b>, just not one a ping reports. It means the
+ * last ping is older than the window, nothing more: the server derives it from
+ * {@code last_heartbeat_at} and never consults the policy's {@code require_heartbeat}, which
+ * defaults to {@code false} and is exactly what the cull job requires before removing anything.
+ * On a default policy nothing is ever culled, so a machine can sit in {@code DEAD} indefinitely
+ * with its row and its seat both still there. In this SDK it surfaces only through the
+ * checkout-family reads, which resolve the machine through a policy-joined query:
+ * {@link sh.tamga.sdk.checkout.MachineFile#verifyAndDecrypt} and
+ * {@link TamgaClient#generateOfflineProof}. A dedicated machine read would show it too; this SDK
+ * does not expose one yet.
+ *
+ * <p><b>A 404 from the ping is the row-is-gone signal.</b> That, not {@code DEAD}, is what
+ * re-activation belongs on. It arrives in the callback's {@code error} argument as a
+ * {@link sh.tamga.sdk.error.TamgaApiException.NotFoundException}.
+ *
+ * <p><b>Handle the tick callback.</b> It is the only way to observe either signal, which is why
+ * failures are reported rather than swallowed.
  *
  * <p>This class is {@link AutoCloseable}, so a try-with-resources block stops it reliably.
  */
 public final class HeartbeatScheduler implements AutoCloseable {
 
-  /** The server's hardcoded machine heartbeat window. */
+  /**
+   * The server's <b>default</b> machine heartbeat window, which applies only when the policy's
+   * {@code heartbeat_duration} is null. A policy that sets that field overrides the window, and
+   * this constant does not track the override.
+   */
   public static final Duration WINDOW = Duration.ofSeconds(600);
 
-  /** A third of {@link #WINDOW}, leaving room for two consecutive failures. */
+  /**
+   * A third of {@link #WINDOW}, leaving room for two consecutive failures -- but only on a policy
+   * that leaves {@code heartbeat_duration} unset. See the class Javadoc before relying on it.
+   */
   public static final Duration DEFAULT_INTERVAL = Duration.ofSeconds(WINDOW.getSeconds() / 3);
+
+  /**
+   * The shortest interval this SDK will ever ping at. Anything below it -- set directly through
+   * {@link Builder#interval(Duration)} or derived from a very short window by
+   * {@link #intervalForWindow(Duration)} -- is raised to this value.
+   *
+   * <p><b>Why a floor, and not the narrower non-positive check this replaced.</b> The old guard
+   * rejected null, negative and zero, reasoning from what
+   * {@link java.util.concurrent.ScheduledExecutorService#scheduleAtFixedRate} refuses. Measured on
+   * this SDK's own toolchain, a period of {@code 0} or {@code -1} does throw
+   * {@link IllegalArgumentException} -- and a period of {@code 1} is honoured exactly, at ~1000
+   * pings a second. A rule drawn around what the runtime refuses therefore clamps {@code 0} and
+   * waves {@code 1} through, giving opposite treatment to two inputs that differ only in which one
+   * the executor's argument validation happens to reject. That is a provenance property, not a
+   * safety one. Only a floor bounds the rate.
+   *
+   * <p>The old guard did not even hold its own line. A positive sub-millisecond {@link Duration}
+   * -- {@code Duration.ofNanos(500_000)}, say -- is neither zero nor negative, so it passed; then
+   * {@link Duration#toMillis()} truncated it to {@code 0} and {@link #start()} threw the very
+   * {@link IllegalArgumentException} the guard existed to prevent. The floor closes that hole too.
+   *
+   * <p><b>The floor costs nothing at any window the server can usefully express.</b> The server
+   * judges a machine dead on {@code age_secs <= window_secs} and {@code age_secs} truncates, so
+   * DEAD is first read a whole second past the window. Measured against a one-second-floored ping,
+   * that leaves window 3 with the divisor's full two tolerable consecutive losses, window 2 with
+   * one, and window 1 with none. Steady state still holds every one of them -- it is the loss
+   * budget
+   * that degrades, not the window. Do not restate this as "a 1s window has no slack at a 1s ping":
+   * truncation gives it a full extra second, and the pessimistic reading is what makes this floor
+   * look broken when it is not. Only window {@code 0} cannot be held, and serving it would mean
+   * pinging roughly three times a second to chase a truncation artifact.
+   * {@code SchedulerWindowTest} pins that arithmetic window by window.
+   *
+   * <p>A null, zero or negative value means "unspecified" rather than "too fast", and still falls
+   * back to {@link #DEFAULT_INTERVAL} rather than to this floor.
+   */
+  public static final Duration MINIMUM_INTERVAL = Duration.ofSeconds(1);
+
+  /**
+   * Raises {@code value} to {@link #MINIMUM_INTERVAL} when it falls below it.
+   *
+   * <p>Package-private so {@link ProcessHeartbeatScheduler} shares this one floor instead of
+   * declaring a second that could drift from it.
+   */
+  static Duration atLeastMinimumInterval(Duration value) {
+    return value.compareTo(MINIMUM_INTERVAL) < 0 ? MINIMUM_INTERVAL : value;
+  }
+
+  /**
+   * Returns the ping interval for a given server heartbeat window: a third of it, the same ratio
+   * {@link #DEFAULT_INTERVAL} applies to {@link #WINDOW}, leaving room for two consecutive failed
+   * pings before the window lapses.
+   *
+   * <p>A null or non-positive window falls back to {@link #DEFAULT_INTERVAL} rather than producing
+   * a zero interval that would busy-loop the timer. A window short enough that a third of it lands
+   * under {@link #MINIMUM_INTERVAL} -- anything below three seconds -- yields that floor instead,
+   * so it is the divisor's two-loss promise that degrades rather than the ping rate that runs
+   * away. Combine with {@link Policy#effectiveHeartbeatWindow()} -- or use
+   * {@link Builder#policy(Policy)}, which does both.
+   *
+   * @param window the server's effective heartbeat window for the machine
+   * @return a third of {@code window} but never below {@link #MINIMUM_INTERVAL}, or
+   *     {@link #DEFAULT_INTERVAL} if {@code window} is null or non-positive
+   */
+  public static Duration intervalForWindow(Duration window) {
+    if (window == null || window.isNegative() || window.isZero()) {
+      return DEFAULT_INTERVAL;
+    }
+    return atLeastMinimumInterval(window.dividedBy(3));
+  }
 
   private final TamgaClient client;
   private final String machineId;
@@ -123,7 +260,24 @@ public final class HeartbeatScheduler implements AutoCloseable {
     }
   }
 
-  /** Sends one ping and reports the outcome. Package-private so tests can drive it directly. */
+  /**
+   * Returns the interval this scheduler pings at, after the {@link #MINIMUM_INTERVAL} floor and
+   * the {@link #DEFAULT_INTERVAL} fallback have been applied. Package-private so tests can assert
+   * the clamp without widening the published surface for it.
+   */
+  Duration interval() {
+    return interval;
+  }
+
+  /**
+   * Sends one ping and reports the outcome. Package-private so tests can drive it directly.
+   *
+   * <p>The outcome never gates the next tick, and no status is a stop condition. A ping response
+   * cannot even carry {@link HeartbeatStatus#DEAD} -- the endpoint writes
+   * {@code last_heartbeat_at = NOW()} before deriving the status from it -- so short-circuiting on
+   * that value would be unreachable code, and short-circuiting on any status this SDK does not yet
+   * know about is what would strand a machine whose row is still very much alive.
+   */
   void tick() {
     Machine machine = null;
     Throwable failure = null;
@@ -157,13 +311,43 @@ public final class HeartbeatScheduler implements AutoCloseable {
     }
 
     /**
-     * Overrides the ping interval. A non-positive value falls back to {@link #DEFAULT_INTERVAL}.
-     * Keep it comfortably below {@link #WINDOW}.
+     * Overrides the ping interval. A null or non-positive value falls back to
+     * {@link #DEFAULT_INTERVAL}; a positive value below {@link #MINIMUM_INTERVAL} is raised to
+     * that floor, so no caller can schedule a ping loop faster than once a second. Keep it
+     * comfortably below the policy's effective window -- {@link #WINDOW} is only the window a
+     * policy gets when it leaves {@code heartbeat_duration} unset.
      */
     public Builder interval(Duration value) {
       this.interval = value == null || value.isNegative() || value.isZero()
-          ? DEFAULT_INTERVAL : value;
+          ? DEFAULT_INTERVAL : atLeastMinimumInterval(value);
       return this;
+    }
+
+    /**
+     * Sizes the interval from a server heartbeat window, via
+     * {@link HeartbeatScheduler#intervalForWindow(Duration)}.
+     *
+     * <p>Use this when the window is known from somewhere other than a {@link Policy} -- an
+     * operator-configured value, say. With a policy in hand, prefer {@link #policy(Policy)}.
+     */
+    public Builder window(Duration value) {
+      return interval(intervalForWindow(value));
+    }
+
+    /**
+     * Sizes the interval from the policy's {@link Policy#effectiveHeartbeatWindow()}.
+     *
+     * <p>This is the only reliable way to get the window: the policy states it directly, whereas
+     * {@link Machine#nextHeartbeatAt()} means different things on different routes. Fetch the
+     * policy with {@link TamgaClient#getLicensePolicy(String)} -- the nested read is authorised as
+     * a license read, so a license-key credential can call it, while the standalone
+     * {@link TamgaClient#getPolicy(String)} needs a permission that credential does not hold.
+     *
+     * <p>A null policy leaves the interval unchanged, so a caller whose policy read failed keeps
+     * whatever default or explicit interval was already set instead of losing it.
+     */
+    public Builder policy(Policy value) {
+      return value == null ? this : window(value.effectiveHeartbeatWindow());
     }
 
     /**

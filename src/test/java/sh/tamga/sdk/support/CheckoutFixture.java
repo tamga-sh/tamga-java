@@ -14,11 +14,15 @@ import sh.tamga.sdk.crypto.AesGcm;
 /**
  * Test-only helpers for building real, correctly-shaped PEM-wrapped checkout certificates ({@code
  * .lic}/{@code .machine} file bodies) -- signs with this SDK's own crypto primitives (Ed25519,
- * RSA, ECDSA, AES-GCM), since there is no independent reference-implementation fixture available
- * in this repo. The crypto primitives themselves are already tested directly (including
- * adversarial mismatched-curve cases, see {@code EcdsaTest}) -- these fixtures exist to exercise
- * the parsing/dispatch/decrypt WIRING in {@code LicenseFile}/{@code MachineFile}, not to re-prove
- * the primitives are individually correct.
+ * RSA, ECDSA, AES-GCM). These exercise the parsing/dispatch/decrypt WIRING in {@code
+ * LicenseFile}/{@code MachineFile} across combinations the fixture corpus does not enumerate; the
+ * crypto primitives themselves are already tested directly (including adversarial mismatched-curve
+ * cases, see {@code EcdsaTest}).
+ *
+ * <p><b>These are not evidence that the wire format is understood correctly</b> -- a file this
+ * repo encodes reproduces whatever this repo believes the format to be, which is exactly how a
+ * misread format survived here for two years. Only the server-produced corpus behind {@link
+ * MachineFixtures} can prove that, and machine-file format questions belong there.
  */
 public final class CheckoutFixture {
 
@@ -36,8 +40,12 @@ public final class CheckoutFixture {
   }
 
   /**
-   * Builds a base64 {@code enc} payload for an AES-256-GCM-encrypted file: base64 of {@code
-   * nonce || ciphertext || tag}.
+   * Builds an {@code enc} payload for an encrypted <b>license</b> file: base64 of a single
+   * {@code nonce || ciphertext || tag} blob.
+   *
+   * <p>Not interchangeable with {@link #machineEncryptedEnc}. The server encrypts the two file
+   * types through different code paths that frame the result differently -- see {@code
+   * EncryptedPayloadDecryptor}.
    */
   public static String encryptedEnc(byte[] json, byte[] key) {
     byte[] nonce = randomBytes(AesGcm.NONCE_LENGTH);
@@ -49,6 +57,22 @@ public final class CheckoutFixture {
     System.arraycopy(ciphertext, 0, combined, nonce.length, ciphertext.length);
     System.arraycopy(tag, 0, combined, nonce.length + ciphertext.length, tag.length);
     return Base64.getEncoder().encodeToString(combined);
+  }
+
+  /**
+   * Builds an {@code enc} payload for an encrypted <b>machine</b> file:
+   * {@code "<nonce_b64>.<ciphertext_b64>"}, the two halves base64-encoded independently.
+   */
+  public static String machineEncryptedEnc(byte[] json, byte[] key) {
+    byte[] nonce = randomBytes(AesGcm.NONCE_LENGTH);
+    AesGcm.SealedData sealed = AesGcm.seal(key, nonce, json);
+    byte[] ciphertext = sealed.ciphertext();
+    byte[] tag = sealed.tag();
+    byte[] ciphertextAndTag = new byte[ciphertext.length + tag.length];
+    System.arraycopy(ciphertext, 0, ciphertextAndTag, 0, ciphertext.length);
+    System.arraycopy(tag, 0, ciphertextAndTag, ciphertext.length, tag.length);
+    return Base64.getEncoder().encodeToString(nonce) + "."
+        + Base64.getEncoder().encodeToString(ciphertextAndTag);
   }
 
   /**
@@ -148,16 +172,28 @@ public final class CheckoutFixture {
     return json.getBytes(StandardCharsets.UTF_8);
   }
 
-  /** A minimal, valid {@code {"data": {...}}} machine-resource JSON payload. */
+  /** A minimal, valid machine-resource payload with no {@code exp} -- a TTL-less checkout. */
   public static byte[] machinePayloadJson(String fingerprint) {
+    return machinePayloadJson(fingerprint, null);
+  }
+
+  /**
+   * As {@link #machinePayloadJson(String)}, with an {@code exp} claim.
+   *
+   * <p>Machine files carry the same signed {@code meta} claims license files do. {@code exp} is
+   * omitted when {@code null}, matching a checkout made without a {@code ttl} -- a file that
+   * legitimately never expires.
+   */
+  public static byte[] machinePayloadJson(String fingerprint, Long exp) {
     String json = "{\"data\":{\"id\":\"mach_123\",\"type\":\"machines\",\"attributes\":{"
-        + "\"fingerprint\":\"" + fingerprint + "\",\"heartbeat_status\":\"NOT_STARTED\"}}}";
+        + "\"fingerprint\":\"" + fingerprint + "\",\"heartbeat_status\":\"NOT_STARTED\"}},"
+        + machineMeta(exp) + "}";
     return json.getBytes(StandardCharsets.UTF_8);
   }
 
   /**
-   * A {@code {"data": {...}}} machine-resource payload exercising every field {@code Machine}
-   * models, including timestamps and metadata.
+   * A machine-resource payload exercising every field {@code Machine} models, including timestamps
+   * and metadata.
    */
   public static byte[] fullMachinePayloadJson(String fingerprint) {
     String json = "{\"data\":{\"id\":\"mach_123\",\"type\":\"machines\",\"attributes\":{"
@@ -165,8 +201,15 @@ public final class CheckoutFixture {
         + "\"platform\":\"linux-x86_64\",\"heartbeat_status\":\"ALIVE\","
         + "\"last_heartbeat_at\":\"2026-08-01T12:00:00.500Z\","
         + "\"last_check_out_at\":\"2026-07-15T09:30:00Z\","
-        + "\"metadata\":{\"region\":\"eu-west-1\",\"cores\":8,\"gpu\":false}}}}";
+        + "\"metadata\":{\"region\":\"eu-west-1\",\"cores\":8,\"gpu\":false}}},"
+        + machineMeta(null) + "}";
     return json.getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static String machineMeta(Long exp) {
+    String expField = exp == null ? "" : ",\"exp\":" + exp;
+    return "\"meta\":{\"iat\":1767225600,\"jti\":\"test-jti\",\"kid\":\"test-kid\""
+        + expField + "}";
   }
 
   private static byte[] randomBytes(int length) {
