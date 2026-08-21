@@ -64,8 +64,12 @@ class EndpointModelsTest {
     assertThat(options.pageSize()).isEqualTo(50);
     assertThat(MachineListOptions.defaults().pageNumber()).isZero();
     assertThat(MachineListOptions.defaults().pageSize()).isZero();
-    assertThat(MachineListOptions.DEFAULT_PAGE_SIZE).isEqualTo(25);
+    // 25 is the SERVER's default for an absent page[size]; this client never omits it, and sends
+    // the server maximum when the caller does not choose. The two constants are not the same fact.
+    assertThat(MachineListOptions.SERVER_DEFAULT_PAGE_SIZE).isEqualTo(25);
     assertThat(MachineListOptions.MAX_PAGE_SIZE).isEqualTo(100);
+    assertThat(MachineListOptions.defaults().toQuery(MachineListOptions.MAX_PAGE_SIZE))
+        .containsEntry("page[size]", "100");
   }
 
   @Test

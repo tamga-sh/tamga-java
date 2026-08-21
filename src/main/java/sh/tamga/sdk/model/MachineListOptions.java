@@ -29,10 +29,31 @@ import java.util.Map;
  */
 public final class MachineListOptions {
 
-  /** The server's own default page size, applied when {@link #pageSize()} is left at zero. */
-  public static final int DEFAULT_PAGE_SIZE = 25;
+  /**
+   * The page size the server applies when {@code page[size]} is <b>absent</b> -- which this SDK
+   * never lets happen.
+   *
+   * <p>Informational, not this client's behaviour: {@code TamgaClient.listMachines} always sends a
+   * size explicitly, and sends the server maximum when {@link #pageSize()} is left at zero. That
+   * follows the same rule as the keyset listings here, where accepting the server default
+   * truncated a result at 25 rows with no signal that it had happened.
+   */
+  public static final int SERVER_DEFAULT_PAGE_SIZE = 25;
 
-  /** The largest page the server will serve; a bigger request is clamped down to this. */
+  /**
+   * The page size the server applies when {@code page[size]} is absent.
+   *
+   * @deprecated misleadingly named -- it is the <em>server's</em> default and is never what this
+   *     client sends, which made it read as "the size you get if you do not choose one". Use
+   *     {@link #SERVER_DEFAULT_PAGE_SIZE}, which says whose default it is.
+   */
+  @Deprecated
+  public static final int DEFAULT_PAGE_SIZE = SERVER_DEFAULT_PAGE_SIZE;
+
+  /**
+   * The largest page the server will serve. A larger request is clamped down to this rather than
+   * rejected ({@code size.clamp(1, 100)}).
+   */
   public static final int MAX_PAGE_SIZE = 100;
 
   private final int pageNumber;
@@ -63,6 +84,11 @@ public final class MachineListOptions {
   /**
    * Returns a copy requesting the given <b>1-based</b> page number. A non-positive value means the
    * first page.
+   *
+   * <p><b>Deep paging is refused, not merely slow.</b> The server caps the offset it will hand
+   * Postgres at 100,000 rows and answers {@code 400 PAGE_OUT_OF_RANGE} beyond it -- so at the
+   * maximum page size that is page 1,001. A listing that needs to go deeper wants a narrower
+   * {@link #licenseIds} or {@link #search} filter, not a bigger page number.
    */
   public MachineListOptions page(int value) {
     return new MachineListOptions(value, pageSize, search, licenseIds, platforms, sort, descending);
