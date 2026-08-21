@@ -36,15 +36,33 @@ class ScopeTest {
   }
 
   @Test
-  void theFourUnenforcedFieldsStillRenderForForwardCompatibility() {
-    // Sent, parsed server-side, then ignored. Modelled so a future server that honours them needs
-    // no SDK change, but never advertised as a working constraint.
+  void theTwoNewlyEnforcedFieldsRender() {
+    // fingerprint and entitlements are genuinely checked now, so they must reach the server.
     Map<String, Object> map = Scope.none()
-        .withFingerprint("fp").withVersion("1.2.3").withChecksum("abc")
-        .withEntitlements(Arrays.asList("PRO"))
+        .withFingerprint("fp").withEntitlements(Arrays.asList("PRO"))
         .toRequestMap();
 
-    assertThat(map).containsOnlyKeys("fingerprint", "version", "checksum", "entitlements");
+    assertThat(map).containsOnlyKeys("fingerprint", "entitlements");
+  }
+
+  @Test
+  @SuppressWarnings("deprecation")
+  void versionAndChecksumAreNeverSent() {
+    // Sending either makes the server refuse the entire validate call with 422
+    // SCOPE_NOT_SUPPORTED before running any check. Dropping them degrades a caller who sets one
+    // to a working validate that simply does not apply that constraint, rather than to no verdict
+    // at all.
+    Map<String, Object> map = Scope.none()
+        .withProduct("prod-1").withVersion("1.2.3").withChecksum("abc")
+        .toRequestMap();
+
+    assertThat(map).containsOnlyKeys("product");
+  }
+
+  @Test
+  @SuppressWarnings("deprecation")
+  void scopeCarryingOnlyUnsendableFieldsRendersToNothing() {
+    assertThat(Scope.none().withVersion("1.2.3").withChecksum("abc").toRequestMap()).isEmpty();
   }
 
   @Test

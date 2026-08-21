@@ -12,8 +12,18 @@ import okhttp3.Request;
  * <b>exactly one</b> -- whichever the caller configured -- rather than replicating that fallback
  * chain. {@link #licenseKey(String)} is the default for an embedded client.
  *
- * <p>Credentials are sent on every request, including endpoints where the server does not enforce
- * authentication today, so callers stay forward-compatible with enforcement landing.
+ * <p><b>Authentication is enforced server-side.</b> Every endpoint this SDK calls sits behind it,
+ * and a missing or bad credential is rejected -- do not build client logic that assumes otherwise.
+ *
+ * <p><b>{@link #licenseKey(String)} additionally depends on the license's policy.</b> The server
+ * accepts a license key only when the policy's {@code authentication_strategy} is {@code LICENSE}
+ * or {@code MIXED}; the column defaults to {@code TOKEN}, and {@code NONE} is refused the same
+ * way. A policy that was never configured for it answers {@code 401 LICENSE_NOT_ALLOWED}
+ * ({@link sh.tamga.sdk.error.TamgaApiException.LicenseNotAllowedException}) to every call. That is
+ * a configuration precondition, not a transient failure: retrying, or asking the user for their
+ * key again, cannot fix it. Two further front-door rejections apply to the same credential
+ * regardless of endpoint -- {@code 401 LICENSE_SUSPENDED} for a suspended license, and
+ * {@code 401 LICENSE_EXPIRED} for an expired one whose policy uses {@code REVOKE_ACCESS}.
  *
  * <p><b>Tokens are opaque strings.</b> The server documents {@code tok-}/{@code prod-}/{@code env-}
  * /{@code activ-}/{@code lic-} prefixes per token type, but every issued token currently gets the
@@ -57,6 +67,9 @@ public interface AuthTransport {
   /**
    * Sends {@code Authorization: License <key>} -- the primary transport for an embedded client SDK
    * validating against a raw license key, and this SDK's default.
+   *
+   * <p>Requires the license's policy to allow it -- see this interface's note on
+   * {@code authentication_strategy}, which defaults to a value that does not.
    */
   static AuthTransport licenseKey(String key) {
     return (url, request) -> request.header("Authorization", "License " + key);

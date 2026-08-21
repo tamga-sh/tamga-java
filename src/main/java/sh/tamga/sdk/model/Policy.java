@@ -462,6 +462,14 @@ public final class Policy {
     public static final String MAINTAIN_ACCESS = "MAINTAIN_ACCESS";
     /** Access is allowed past expiry. */
     public static final String ALLOW_ACCESS = "ALLOW_ACCESS";
+    /**
+     * Access is revoked at expiry, and this is the only one of the four that changes
+     * <b>authentication</b> rather than just the validation verdict: an expired license under
+     * {@code REVOKE_ACCESS} is refused at the front door with
+     * {@code 401 LICENSE_EXPIRED}, so no endpoint answers at all. Under the other three an
+     * expired license still authenticates and validate reports {@code EXPIRED}.
+     */
+    public static final String REVOKE_ACCESS = "REVOKE_ACCESS";
 
     private ExpirationStrategy() {
     }
@@ -480,12 +488,22 @@ public final class Policy {
 
   /** Documented values for {@code authentication_strategy}. Free text server-side, as above. */
   public static final class AuthenticationStrategy {
-    /** The server's default. */
+    /**
+     * The server's default, and the reason license-key authentication is <b>off unless someone
+     * turned it on</b>: the column defaults to this value and it refuses
+     * {@code Authorization: License <key>} with {@code 401 LICENSE_NOT_ALLOWED}.
+     */
     public static final String TOKEN = "TOKEN";
-    /** License-key authentication. */
+    /** License-key authentication. One of the two values that permit it. */
     public static final String LICENSE = "LICENSE";
-    /** Either token or license-key authentication. */
+    /** Either token or license-key authentication. The other value that permits it. */
     public static final String MIXED = "MIXED";
+    /**
+     * No strategy configured. Behaves exactly like {@link #TOKEN} at the authentication gate --
+     * license-key credentials are refused with {@code 401 LICENSE_NOT_ALLOWED}. It does not mean
+     * "no authentication required".
+     */
+    public static final String NONE = "NONE";
 
     private AuthenticationStrategy() {
     }

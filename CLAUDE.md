@@ -133,29 +133,117 @@ no-op or advertise a guarantee the server doesn't enforce. Only the gaps relevan
 scope (license validation, checkout, machine management, offline proof) are listed — see the
 source doc for the full set, including analytics/EE items that don't touch this SDK at all.
 
-- **Auto-update/release-checking is explicitly out of scope for v1.** `GET
-  /releases/actions/upgrade` crashes at runtime server-side (queries a `release_artifacts` table
-  and columns that don't exist in any migration) and even once fixed has no working
-  download-URL endpoint. Do not build any "check for update" client feature against it.
-- **No auth is enforced server-side on license or machine endpoints today.** Still always send
-  `Authorization: License <key>` (forward-compatible) — just don't build client-side logic that
-  assumes a bad/missing credential gets rejected right now.
-- **Only 14 of 24 `ValidationCode` values are reachable.** Model all 24 with lenient/unknown-value
-  decoding (`@JsonEnumDefaultValue` on `UNKNOWN`), but don't build UI/UX around the 10 that are
-  declared and never emitted (`BANNED`, `ENTITLEMENTS_MISSING`, `TOO_MANY_USERS`,
-  `HEARTBEAT_DEAD`, `HEARTBEAT_NOT_STARTED`, `FINGERPRINT_SCOPE_MISMATCH`,
-  `COMPONENTS_SCOPE_MISMATCH`, `CHECKSUM_SCOPE_MISMATCH`, `VERSION_SCOPE_MISMATCH`, and
-  `NOT_FOUND`, which surfaces as an HTTP 404 instead of this code). Same applies to
-  `ValidationScope`'s `entitlements`/`fingerprint`/`version`/`checksum` fields — build the request
-  field, don't advertise it as a functioning constraint. (Still stub — deferred with the rest of
-  the HTTP-facing surface.)
+- **The upgrade-check endpoint works now.** The previous directive here — "`GET
+  /releases/actions/upgrade` crashes at runtime and there is no download route" — was verified
+  false against the server and is deleted; it was forbidding work that is buildable. The route is
+  live, public (`OptionalAuth`), and enforces the product's distribution strategy. Real
+  constraints to encode when it is implemented: an up-to-date caller gets **204 with an empty
+  body**, so an "optional release" return type that cannot distinguish 204 from a decode failure
+  is wrong; omitting `constraint` defaults to patch-only (`~x.y.z`); omitting `channel` matches
+  **every** channel including alpha and dev, so require it at the API level; the handler uses a
+  bare query extractor, so a malformed query answers **plain-text 400**, not JSON:API. The
+  artifact-download route exists too, but every credential this SDK issues is currently refused by
+  it (`artifact.download` is in no role's default permission set) — that one is genuinely blocked
+  upstream.
+- **Auth IS enforced server-side, and license-key auth is off by default.** The previous claim
+  here ("no auth is enforced today") was false. Every endpoint this SDK calls is authenticated,
+  and `Authorization: License <key>` additionally requires the license's policy to set
+  `authentication_strategy` to `LICENSE` or `MIXED`. The column **defaults to `TOKEN`**, and
+  `NONE` behaves the same way, so an otherwise perfect key answers `401 LICENSE_NOT_ALLOWED` on
+  every call until an operator changes the policy. Treat that code as a configuration
+  precondition, never as a retryable auth failure or a "wrong key" prompt. Two sibling front-door
+  rejections apply to the same credential: `401 LICENSE_SUSPENDED` for a suspended license, and
+  `401 LICENSE_EXPIRED` for an expired one whose policy uses `REVOKE_ACCESS` (under the other
+  three expiration strategies an expired license still authenticates and validate reports
+  `EXPIRED`). All three, plus the four create-time limit codes and `TOO_MANY_PROCESSES`, are
+  mapped to their own `TamgaApiException` subclasses.
+- **16 of 24 `ValidationCode` values are reachable, and the scope story has changed twice over.**
+  Model all 24 with lenient/unknown-value decoding (`@JsonEnumDefaultValue` on `UNKNOWN`), but
+  don't build UI/UX around the 8 that are declared and never emitted (`BANNED`, `TOO_MANY_USERS`,
+  `HEARTBEAT_DEAD`, `HEARTBEAT_NOT_STARTED`, `COMPONENTS_SCOPE_MISMATCH`,
+  `CHECKSUM_SCOPE_MISMATCH`, `VERSION_SCOPE_MISMATCH`, and `NOT_FOUND`, which surfaces as an
+  HTTP 404 instead of this code). The `Scope` fields split three ways now:
+  - `product`/`policy`/`user`/`environment` — enforced, as always.
+  - `entitlements`/`fingerprint` — **now genuinely enforced**, so `ENTITLEMENTS_MISSING` and
+    `FINGERPRINT_SCOPE_MISMATCH` are real verdicts. `entitlements` takes entitlement **codes**
+    (not the UUIDs the attach/detach bodies use), compared case-insensitively and de-duplicated,
+    satisfied by policy-inherited entitlements as well as direct ones; an empty list asserts
+    nothing. `fingerprint` matches any machine of the license regardless of heartbeat status.
+  - `version`/`checksum` — **not ignored: fatal.** The server answers `422 SCOPE_NOT_SUPPORTED`
+    the moment either is present, before any validation runs, so the caller gets no verdict at
+    all. `Scope.toRequestMap()` therefore drops both and the two `with*` methods are
+    `@Deprecated`; that degrades a caller who sets one to a working validate instead of a hard
+    failure. Do not add a typed `SCOPE_NOT_SUPPORTED` error — the generic API-error path covers
+    it, and the fleet decision was to keep this patch-safe everywhere.
 - **HTTP 429 is live and must be handled once `Transport` exists.** The server returns it, and the
   rest of the SDK fleet already ships the handling: parsed and capped `Retry-After`, jittered
-  exponential backoff, auto-retry scoped to `GET` plus the five safe `POST` actions (`validate`,
-  `validate-key`, `check-in`, `check-out`, `ping`), with resource creation deliberately excluded.
+  exponential backoff, auto-retry scoped to `GET` plus the seven safe `POST` actions (`validate`,
+  `validate-key`, `check-in`, `check-out`, `ping`, `ping-heartbeat`, `reset-heartbeat`), with
+  resource creation deliberately excluded. `ping-heartbeat`/`reset-heartbeat` were previously
+  excluded on the reasoning that suffix matching must not confuse them with `/actions/ping` —
+  true, which is why they are listed in their own right rather than folded in. Both are bare
+  `SET last_heartbeat_at = NOW()` writes with no seat-burning risk, and the rate limiter buckets
+  per **route pattern**, so an entire fleet shares one budget on that path: a dropped 429 there
+  gets the machine culled. `RateLimitTest` now pins the opposite of what it used to.
   Implemented in `Transport`: see `isRetryable`, `parseRetryAfterSeconds` and `retryDelayMillis`,
   and `RateLimitTest` for the regressions that pin the policy — in particular that `POST
   /machines` makes exactly one call.
+- **Machine creation enforces the policy's limits — through the overage strategy.** The old
+  directive ("no policy limit is checked at creation; limits surface only through validation") was
+  false. `POST /machines` rejects with `422 MACHINE_LIMIT_EXCEEDED` / `CORE_LIMIT_EXCEEDED` /
+  `MEMORY_LIMIT_EXCEEDED` / `DISK_LIMIT_EXCEEDED` — but that check runs through
+  `policy.overage_strategy`, so under `ALLOW_ACCESS` or `ALLOW_1_25X_OVERAGE` the create still
+  succeeds and the limit only appears at validate. **Both paths are live**, which is why
+  `activateMachine` keeps the create→validate→rollback sequence *and* catches the create-time 422.
+  It normalizes the create-time code onto the validation vocabulary
+  (`ValidationCode.fromMachineLimitErrorCode`) and throws the same
+  `TamgaMachineOverLimitException` either way, so product code never has to handle two sets of
+  names for one condition; `rolledBack()` says which path ran. Uniqueness is checked *before* the
+  limits, so a re-activation is `409 FINGERPRINT_TAKEN` and must never be translated into an
+  over-limit verdict — telling a customer to buy seats for a machine they already licensed is the
+  exact failure that ordering exists to prevent.
+- **Machine `memory` and `disk` are MEGABYTES, not bytes.** Both the resource model and the
+  create-options builder said bytes. A caller reporting 16 GiB as `17179869184` inflates the
+  license's `machines_memory_count` by a factor of 1,048,576 and the *next* activation on that
+  license fails with `MEMORY_LIMIT_EXCEEDED` — a bug that only ever shows up on someone else's
+  machine.
+- **The entitlements listing does not paginate.** `GET /licenses/{id}/entitlements` is a union of
+  directly attached and policy-inherited rows, which one keyset cursor cannot describe, so the
+  server reads `page[after]` into a field it never uses (and would reject a non-UUID cursor
+  outright). `listEntitlements` therefore never sends the parameter and always reports
+  `nextCursor == null`; a license with more than 100 effective entitlements **cannot be
+  enumerated completely** through this route, so a `false` from `hasEntitlement` is only
+  authoritative below that ceiling. Two related items on the same route: entitlement resources
+  carry an `inherited` flag (exposed as `Entitlement.inherited()`, `null` on responses that do not
+  send it) — an inherited entitlement cannot be detached and **`getEntitlement` answers 404 for
+  it**, so list-then-get-each is not a valid pattern here. `/machines/{id}/components` is
+  different: keyset paging genuinely works there, do not "fix" it to match.
+- **Never let the server pick the page size.** Its default is 25, these listings carry no
+  `meta.page` and no `links`, and the only end-of-list signal is a page shorter than a limit the
+  client already knows — so an omitted `limit` truncated silently at 25 with no cursor to
+  continue from. `TamgaClient` sends the server maximum (100) explicitly when the caller does not
+  choose one.
+- **Quick-validate DOES touch the license, unless the request carries `Origin`.** The javadoc used
+  to say the exact opposite. `GET /licenses/{id}/actions/validate` writes `last_validated_at`, and
+  the server skips that write entirely when an `Origin` header is present — with a
+  byte-identical response either way, so a caller cannot tell. That column decides whether a
+  machine-less license reports `INACTIVE` and is the baseline for the check-in-overdue worker, so
+  behind a proxy that adds `Origin` neither can ever move. This SDK never sets `Origin` itself;
+  the only genuinely side-effect-free path is `POST validate` with `meta.skip_touch: true`.
+- **`resetHeartbeat` and `generateOfflineProof` are always 403 for a license-key credential.**
+  Both are gated on **role**, not permission: admin/developer/product/environment tokens only.
+  `LicenseToken` fails even though it holds `machine.proofs.generate`. This matters most for
+  `resetHeartbeat`, which is the only server-side way to unstick a wedged heartbeat job —
+  presenting it to an embedded client as a recovery tool promises a recovery that cannot happen.
+- **Two more legal strategy values exist:** `expiration_strategy` also accepts `REVOKE_ACCESS`
+  (the only one of the four that blocks *authentication* rather than just the validation verdict),
+  and `authentication_strategy` also accepts `NONE` (which behaves like `TOKEN` at the auth gate —
+  it does not mean "no auth required"). Both are on `Policy.ExpirationStrategy` /
+  `Policy.AuthenticationStrategy`.
+- **The default request timeout must not equal the server's.** The server runs its own 30 s
+  `TimeoutLayer`; matching it exactly makes the two race, and the local timeout usually wins,
+  throwing away the server's `504` and with it the `X-Request-Id` that is the only handle support
+  has on a slow request. `TamgaClient.DEFAULT_TIMEOUT` is 45 s for that reason.
 - **`Tamga-Environment` request header does nothing server-side.** It's a planned EE feature with
   no request-parsing code path yet. Don't expose a client-facing "environment" option that implies
   it's honored today.

@@ -128,12 +128,14 @@ class RateLimitTest {
   }
 
   @Test
-  void onlyTheFiveSafePostActionsAreRetryable() {
+  void onlyTheSevenSafePostActionsAreRetryable() {
     assertThat(Transport.isRetryable("POST", "/licenses/actions/validate-key")).isTrue();
     assertThat(Transport.isRetryable("POST", "/licenses/lic-1/actions/validate")).isTrue();
     assertThat(Transport.isRetryable("POST", "/licenses/lic-1/actions/check-in")).isTrue();
     assertThat(Transport.isRetryable("POST", "/licenses/lic-1/actions/check-out")).isTrue();
     assertThat(Transport.isRetryable("POST", "/processes/p-1/actions/ping")).isTrue();
+    assertThat(Transport.isRetryable("POST", "/machines/m-1/actions/ping-heartbeat")).isTrue();
+    assertThat(Transport.isRetryable("POST", "/machines/m-1/actions/reset-heartbeat")).isTrue();
 
     assertThat(Transport.isRetryable("POST", "/machines")).isFalse();
     assertThat(Transport.isRetryable("POST", "/components")).isFalse();
@@ -142,10 +144,23 @@ class RateLimitTest {
   }
 
   @Test
-  void heartbeatPingsAreNotTreatedAsTheRetryablePingAction() {
-    // Suffix matching, not substring: "ping-heartbeat" must not be mistaken for "/actions/ping".
-    assertThat(Transport.isRetryable("POST", "/machines/m-1/actions/ping-heartbeat")).isFalse();
-    assertThat(Transport.isRetryable("POST", "/machines/m-1/actions/reset-heartbeat")).isFalse();
+  void heartbeatWritesAreRetryableInTheirOwnRight() {
+    // Both are bare `SET last_heartbeat_at = NOW()` updates -- repeating one cannot burn a seat.
+    // Dropping a throttled heartbeat is what is actually dangerous: the machine goes on to be
+    // culled, and the rate limiter buckets per route pattern, so a whole fleet 429s itself on
+    // exactly this path.
+    assertThat(Transport.isRetryable("POST", "/machines/m-1/actions/ping-heartbeat")).isTrue();
+    assertThat(Transport.isRetryable("POST", "/machines/m-1/actions/reset-heartbeat")).isTrue();
+  }
+
+  @Test
+  void matchingIsBySuffixNotSubstring() {
+    // Each retryable action is listed in its own right precisely because "ping-heartbeat" does not
+    // end with "/actions/ping". Nothing else that merely contains one of them matches.
+    assertThat(Transport.isRetryable("POST", "/machines/m-1/actions/check-out-something"))
+        .isFalse();
+    assertThat(Transport.isRetryable("POST", "/machines/m-1/actions/generate-offline-proof"))
+        .isFalse();
   }
 
   @Test

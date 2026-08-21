@@ -2,6 +2,7 @@ package sh.tamga.sdk;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -32,6 +33,7 @@ import sh.tamga.sdk.model.Page;
 import sh.tamga.sdk.model.Process;
 import sh.tamga.sdk.model.Scope;
 import sh.tamga.sdk.model.ValidateOptions;
+import sh.tamga.sdk.model.ValidationCode;
 import sh.tamga.sdk.model.ValidationMeta;
 import sh.tamga.sdk.model.ValidationResult;
 
@@ -61,6 +63,11 @@ import sh.tamga.sdk.model.ValidationResult;
  * creation is deliberately excluded, so a rate-limited activation surfaces rather than silently
  * burning a second seat.
  *
+ * <p><b>Every endpoint is authenticated server-side</b>, and the default license-key transport
+ * additionally requires the license's policy to permit license-key authentication -- see
+ * {@link AuthTransport}. A policy left at its default answers {@code 401 LICENSE_NOT_ALLOWED} to
+ * every call here.
+ *
  * <p>Offline verification does not go through this class and needs no client at all -- see
  * {@link sh.tamga.sdk.checkout.LicenseFile}, {@link sh.tamga.sdk.checkout.MachineFile} and
  * {@link sh.tamga.sdk.proof.OfflineProof}.
@@ -70,14 +77,32 @@ public final class TamgaClient {
   /** The production API host, used unless {@link Builder#host(String)} overrides it. */
   public static final String DEFAULT_HOST = "https://api.tamga.sh";
 
-  /** Default per-request timeout. */
-  static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
+  /**
+   * Default per-request timeout.
+   *
+   * <p>Deliberately longer than the server's own 30-second request timeout. Matching it exactly
+   * makes the two race on any slow request, and the local timeout usually wins -- which throws
+   * away the server's {@code 504} and, with it, the {@code X-Request-Id} that is the only handle
+   * support has on a slow request.
+   */
+  static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(45);
 
   /**
    * The page size {@link #hasEntitlement} requests. This is the server's maximum, and it fetches a
    * single page -- see that method's note on the resulting limitation.
    */
   static final int ENTITLEMENT_LOOKUP_PAGE_SIZE = 100;
+
+  /**
+   * The {@code limit} sent when the caller does not choose one.
+   *
+   * <p>Not left to the server. Its own default is 25, these listings carry no {@code meta.page}
+   * and no {@code links}, and the only end-of-list signal is a page shorter than a limit the
+   * client already knows -- so accepting the server default silently truncated at 25 rows with no
+   * cursor to continue from. Sending the server maximum explicitly makes the page-full test
+   * meaningful again.
+   */
+  static final int DEFAULT_PAGE_SIZE = 100;
 
   private final Transport transport;
   private final EntitlementCache entitlementCache;
@@ -114,9 +139,12 @@ public final class TamgaClient {
     meta.put("skip_touch", opts.skipTouch());
     Scope scope = opts.scope();
     // An unset scope is omitted entirely rather than sent as null: the server treats a present
-    // key as a constraint to evaluate.
-    if (scope != null && !scope.isEmpty()) {
-      meta.put("scope", scope.toRequestMap());
+    // key as a constraint to evaluate. The emptiness test is on the rendered map, not on
+    // Scope.isEmpty(): a scope carrying only the two unsendable fields (version, checksum) renders
+    // to nothing, and sending "scope": {} for it would be noise.
+    Map<String, Object> scopeMap = scope == null ? null : scope.toRequestMap();
+    if (scopeMap != null && !scopeMap.isEmpty()) {
+      meta.put("scope", scopeMap);
     }
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("meta", meta);
@@ -127,10 +155,20 @@ public final class TamgaClient {
   }
 
   /**
-   * Validates a license by id without touching it, returning only the verdict.
+   * Validates a license by id, returning only the verdict.
    *
    * <p>This is the one endpoint whose response is <b>flat</b>: there is no {@code data} envelope
    * and no license resource, just the four validation fields at the top level.
+   *
+   * <p><b>This does touch the license.</b> It writes {@code last_validated_at} -- unless the
+   * request carries an {@code Origin} header, in which case the server skips the write entirely.
+   * The response is byte-identical either way, so a caller cannot tell which happened. That
+   * matters because a license with no machines and no {@code last_validated_at} reports
+   * {@code INACTIVE}, and the check-in-overdue worker measures from the same column: behind a
+   * proxy that adds {@code Origin}, this endpoint can never move either. This SDK never sets
+   * {@code Origin} itself. For a genuinely side-effect-free check use
+   * {@link #validateById} with {@link ValidateOptions#withSkipTouch}, which is honoured
+   * unconditionally.
    */
   public ValidationMeta quickValidate(String licenseId) {
     JsonNode root =
@@ -198,8 +236,19 @@ public final class TamgaClient {
   /**
    * Registers a machine against a license.
    *
-   * <p>No policy limit is checked here -- limits surface later, through validation. Prefer
-   * {@link #activateMachine} when the desired behaviour is "reject an over-limit activation".
+   * <p><b>Policy limits are checked here</b>, through the policy's overage strategy: a strict
+   * policy rejects with {@code 422} and one of
+   * {@link TamgaApiException.MachineLimitExceededException},
+   * {@link TamgaApiException.CoreLimitExceededException},
+   * {@link TamgaApiException.MemoryLimitExceededException} or
+   * {@link TamgaApiException.DiskLimitExceededException}, while a permissive one
+   * ({@code ALLOW_ACCESS}, {@code ALLOW_1_25X_OVERAGE}) creates the row and leaves the limit to
+   * surface at validation. Uniqueness is checked before all of them, so re-sending a fingerprint
+   * that is already activated answers {@code 409 FINGERPRINT_TAKEN} rather than a limit error.
+   *
+   * <p>Prefer {@link #activateMachine}, which reports both limit paths as one outcome.
+   *
+   * <p>{@code memory} and {@code disk} on {@link CreateMachineOptions} are <b>megabytes</b>.
    */
   public Machine createMachine(CreateMachineOptions options) {
     JsonNode root = transport.postJson(Collections.singletonList("machines"),
@@ -213,26 +262,56 @@ public final class TamgaClient {
   }
 
   /**
-   * Registers a machine and validates the license in one step, rolling the machine back if the
-   * license turns out to be over a policy limit.
+   * Registers a machine and validates the license in one step, reporting an over-limit license as
+   * one outcome however the server chose to report it.
    *
    * <p>This is a composite, not a single endpoint: create, then validate, then delete on an
-   * over-limit verdict. Machine creation itself enforces nothing, so without the rollback an
-   * over-limit activation would leave a row behind that still consumes a seat.
+   * over-limit verdict. <b>Both halves of that are load-bearing</b>, because the server enforces
+   * limits twice and which one fires depends on the policy:
+   *
+   * <ul>
+   *   <li>Creation runs the machine/core/memory/disk checks through the policy's overage strategy.
+   *       A strict policy rejects the create with {@code 422 MACHINE_LIMIT_EXCEEDED} and friends;
+   *       nothing was created, so nothing is rolled back.
+   *   <li>Under a permissive strategy ({@code ALLOW_ACCESS}, {@code ALLOW_1_25X_OVERAGE}) that
+   *       same check passes and the limit appears only in the validate verdict. The machine row
+   *       exists at that point and is deleted, or it would go on consuming a seat.
+   * </ul>
+   *
+   * <p>Either way the caller gets {@link TamgaMachineOverLimitException} carrying a validation
+   * code, so the two vocabularies never reach product code. {@code rolledBack()} on the exception
+   * says which path ran.
    *
    * <p>If the validation call itself fails, the machine is <b>not</b> deleted: a network blip is
    * not a verdict about the license, and deleting on one destroys a seat the license may well be
    * entitled to. It is handed back on {@link TamgaActivationValidationException} so the caller can
    * retry validation or delete it. This matches {@code tamga-go}.
    *
-   * @throws TamgaMachineOverLimitException if validation reported an over-limit code. The machine
-   *     has already been deleted by the time this is thrown; the exception carries the validation
-   *     meta so the caller can tell which limit was exceeded.
+   * @throws TamgaMachineOverLimitException if the license is over a policy limit, whether the
+   *     server said so at creation or at validation. No machine row survives in either case; the
+   *     exception carries the validation meta so the caller can tell which limit was exceeded.
    * @throws TamgaActivationValidationException if the validation call itself failed. The machine
    *     still exists and is carried on the exception.
    */
   public ActivationResult activateMachine(CreateMachineOptions options, Scope scope) {
-    Machine machine = createMachine(options);
+    Machine machine;
+    try {
+      machine = createMachine(options);
+    } catch (TamgaApiException e) {
+      // A create-time limit rejection is the same product event as an over-limit validate verdict,
+      // so it is translated rather than passed through -- otherwise the caller has to handle two
+      // sets of names for one condition, and which one they see depends on a policy setting they
+      // do not control. Anything else (FINGERPRINT_TAKEN, auth, transport) is not a limit and is
+      // rethrown untouched.
+      ValidationCode limit = ValidationCode.fromMachineLimitErrorCode(e.code());
+      if (limit == null) {
+        throw e;
+      }
+      throw new TamgaMachineOverLimitException(
+          ValidationMeta.of(Instant.now(), false, e.error() == null ? null : e.error().detail(),
+              limit),
+          false, e);
+    }
     ValidationResult validation;
     try {
       validation = validateById(options.licenseId(), ValidateOptions.defaults().withScope(scope));
@@ -281,7 +360,15 @@ public final class TamgaClient {
     return Machine.fromResourceNode(root.get("data"));
   }
 
-  /** Resets a machine's heartbeat, returning it to the not-started state. */
+  /**
+   * Resets a machine's heartbeat, returning it to the not-started state.
+   *
+   * <p><b>Always {@code 403} for a license-key credential.</b> The server gates this on role, not
+   * on permission: only an admin, developer, product or environment token may call it, and
+   * {@link AuthTransport#licenseKey} is none of those. Worth knowing because this is the only
+   * server-side way to unstick a machine whose heartbeat job is wedged -- an embedded client
+   * cannot perform that recovery itself and should surface it as an operator task.
+   */
   public Machine resetHeartbeat(String machineId) {
     JsonNode root = transport.postJson(
         Arrays.asList("machines", machineId, "actions", "reset-heartbeat"), null);
@@ -294,6 +381,11 @@ public final class TamgaClient {
    * <p>Verify it later with {@code sh.tamga.sdk.proof.OfflineProof} against the same dataset. The
    * signature covers a canonical, recursively key-sorted rendering, so the dataset must round-trip
    * byte-identically.
+   *
+   * <p><b>Always {@code 403} for a license-key credential</b>, the same role gate as
+   * {@link #resetHeartbeat} -- and it holds even though that credential carries the
+   * {@code machine.proofs.generate} permission. Proofs have to be minted by a back-office
+   * credential and shipped to the client.
    */
   public OfflineProofResult generateOfflineProof(String machineId, Map<String, Object> dataset) {
     Map<String, Object> meta = new LinkedHashMap<>();
@@ -349,19 +441,44 @@ public final class TamgaClient {
 
   // ------------------------------------------------------------ entitlements
 
-  /** Lists a license's entitlements, one keyset-paginated page at a time. */
+  /**
+   * Lists a license's entitlements: direct and policy-inherited, in one unpaginated response.
+   *
+   * <p><b>This route does not paginate.</b> Its listing is a union of two tables, so a single
+   * keyset cursor cannot describe it and the server accepts {@code page[after]} only for wire
+   * compatibility -- it is read into a field it never uses. This SDK therefore never sends the
+   * parameter (a cursor that is not a UUID would be rejected outright by the server's query
+   * decoding) and {@link Page#nextCursor()} is always {@code null} here. {@code limit} still
+   * works and is capped at 100.
+   *
+   * <p><b>Consequence:</b> a license with more than 100 effective entitlements cannot be
+   * enumerated completely through this endpoint at all. A short result is not proof that no more
+   * exist -- 100 items back means the list was truncated with no way to continue.
+   *
+   * <p>{@link Entitlement#inherited()} distinguishes the two sources.
+   */
   public Page<Entitlement> listEntitlements(String licenseId, ListOptions options) {
     ListOptions opts = options == null ? ListOptions.defaults() : options;
-    JsonNode root = transport.getJson(Arrays.asList("licenses", licenseId, "entitlements"),
-        pageQuery(opts));
+    Map<String, String> query = new LinkedHashMap<>();
+    query.put("limit", Integer.toString(effectivePageSize(opts)));
+    JsonNode root = transport.getJson(Arrays.asList("licenses", licenseId, "entitlements"), query);
     List<Entitlement> items = new ArrayList<>();
     for (JsonNode node : root.path("data")) {
       items.add(Entitlement.fromResourceNode(node));
     }
-    return new Page<>(synthesizeCursor(items.size(), opts, lastId(root)), items);
+    // Unconditionally null: there is nothing to continue from, and synthesizing a cursor here
+    // would invite a loop that refetches the same first page forever.
+    return new Page<>(null, items);
   }
 
-  /** Fetches a single entitlement of a license by id. */
+  /**
+   * Fetches a single <b>directly attached</b> entitlement of a license by id.
+   *
+   * <p>This route joins only the license's own attachments, so an entitlement that
+   * {@link #listEntitlements} returned with {@link Entitlement#inherited()} {@code true} answers
+   * {@code 404} here. List-then-get-each is not a valid pattern on this resource; take the
+   * resources the listing already returned.
+   */
   public Entitlement getEntitlement(String licenseId, String entitlementId) {
     JsonNode root = transport.getJson(
         Arrays.asList("licenses", licenseId, "entitlements", entitlementId), null);
@@ -375,10 +492,10 @@ public final class TamgaClient {
    * <p>Matching is on {@code code}, the stable developer-facing identifier. Never match on
    * {@code name}, which is a display label that may collide or change.
    *
-   * <p><b>Known limitation:</b> this fetches a single page of
-   * {@value #ENTITLEMENT_LOOKUP_PAGE_SIZE} entitlements, the server's maximum. A license carrying
-   * more than that is silently truncated here; paginate {@link #listEntitlements} directly if that
-   * is a possibility.
+   * <p><b>Known limitation:</b> this fetches {@value #ENTITLEMENT_LOOKUP_PAGE_SIZE} entitlements,
+   * the server's maximum, and that endpoint does not paginate -- so a license carrying more than
+   * that is truncated here with no way to read the rest. A {@code true} result is always
+   * authoritative; a {@code false} one is authoritative only for a license below that ceiling.
    */
   public boolean hasEntitlement(String licenseId, String code) {
     Set<String> cached = entitlementCache.fresh(licenseId);
@@ -404,11 +521,20 @@ public final class TamgaClient {
 
   // ----------------------------------------------------------------- helpers
 
+  /**
+   * Returns the page size to request: the caller's, or {@link #DEFAULT_PAGE_SIZE} when they did not
+   * choose one.
+   *
+   * <p>Never zero, and never left to the server. Cursor synthesis below compares the row count to
+   * the requested limit, which is only possible when the limit is one this client picked.
+   */
+  private static int effectivePageSize(ListOptions opts) {
+    return opts.pageSize() > 0 ? opts.pageSize() : DEFAULT_PAGE_SIZE;
+  }
+
   private static Map<String, String> pageQuery(ListOptions opts) {
     Map<String, String> query = new LinkedHashMap<>();
-    if (opts.pageSize() > 0) {
-      query.put("limit", Integer.toString(opts.pageSize()));
-    }
+    query.put("limit", Integer.toString(effectivePageSize(opts)));
     if (opts.afterCursor() != null) {
       query.put("page[after]", opts.afterCursor());
     }
@@ -423,10 +549,7 @@ public final class TamgaClient {
    * further to fetch, so the cursor is null.
    */
   private static String synthesizeCursor(int returned, ListOptions opts, String lastId) {
-    if (opts.pageSize() <= 0 || returned < opts.pageSize()) {
-      return null;
-    }
-    return lastId;
+    return returned < effectivePageSize(opts) ? null : lastId;
   }
 
   private static String lastId(JsonNode root) {

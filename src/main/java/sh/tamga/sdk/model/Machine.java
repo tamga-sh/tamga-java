@@ -110,12 +110,18 @@ public final class Machine {
     return cores;
   }
 
-  /** Returns the machine's reported memory in bytes, or {@code null}. */
+  /**
+   * Returns the machine's reported memory in <b>megabytes</b>, or {@code null}.
+   *
+   * <p>Not bytes. The column is documented as megabytes server-side and feeds the license's
+   * {@code machines_memory_count}, which the policy's memory limit is checked against at
+   * activation.
+   */
   public Long memory() {
     return memory;
   }
 
-  /** Returns the machine's reported disk in bytes, or {@code null}. */
+  /** Returns the machine's reported disk in <b>megabytes</b>, or {@code null}. Not bytes. */
   public Long disk() {
     return disk;
   }

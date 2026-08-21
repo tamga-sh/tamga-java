@@ -67,8 +67,8 @@ public final class Transport {
    * <p>Without a cap, a compromised or hostile endpoint can drive the embedding application into
    * an {@code OutOfMemoryError} simply by answering with a very large or chunked body. The call
    * timeout bounds how long a response may take, not how large it may be, and a fast connection
-   * delivers a great deal inside 30 seconds. This applies to error bodies too, which are read
-   * before any credential has necessarily been accepted.
+   * delivers a great deal inside the default 45-second call timeout. This applies to error bodies
+   * too, which are read before any credential has necessarily been accepted.
    *
    * <p>32 MiB is far above any legitimate response: the largest thing this API returns is a
    * checkout certificate measured in kilobytes.
@@ -85,12 +85,18 @@ public final class Transport {
    * <p>Creates are deliberately absent. Retrying {@code POST /machines} risks a second activation
    * burning a second seat, and only the caller knows whether that is acceptable.
    *
-   * <p>Matching is by suffix, not substring. {@code ping-heartbeat} and {@code reset-heartbeat}
-   * therefore do <b>not</b> match {@code /actions/ping} -- only a process ping does.
+   * <p>Matching is by suffix, not substring, so each heartbeat action is listed in its own right.
+   * {@code /actions/ping-heartbeat} does not end with {@code /actions/ping} -- that suffix only
+   * matches a process ping -- and leaving it out meant a throttled heartbeat was dropped silently
+   * and the machine went on to be culled. Both heartbeat writes are bare
+   * {@code SET last_heartbeat_at = NOW()} updates: repeating one cannot burn a seat or double
+   * anything, and the rate limiter buckets per route pattern, so a whole fleet shares one budget
+   * on exactly these paths and 429s them for each other.
    */
   private static final List<String> RETRYABLE_POST_SUFFIXES = Collections.unmodifiableList(
       Arrays.asList("/actions/validate", "/actions/validate-key", "/actions/check-in",
-          "/actions/check-out", "/actions/ping"));
+          "/actions/check-out", "/actions/ping", "/actions/ping-heartbeat",
+          "/actions/reset-heartbeat"));
 
   private final OkHttpClient httpClient;
   private final HttpUrl baseUrl;

@@ -65,7 +65,9 @@ if (!result.valid()) {
 }
 ```
 
-Activating a machine, with the seat freed automatically if the license is over its limit:
+Activating a machine. An over-limit license is reported the same way whether the server refuses
+the create outright or lets it through and reports the limit at validation; in the second case the
+machine is deleted before the exception is thrown, so no seat is left consumed either way:
 
 ```java
 import sh.tamga.sdk.HeartbeatScheduler;
@@ -88,7 +90,8 @@ try {
       .build();
   scheduler.start();
 } catch (TamgaMachineOverLimitException e) {
-  // The machine has already been deleted; the meta says which limit was hit.
+  // No machine row survives, whichever of the two limit checks fired. The meta says which limit
+  // was hit, always in validation-code terms; e.rolledBack() says whether one had to be deleted.
   showSeatLimitMessage(e.validationMeta().code());
 } catch (TamgaActivationValidationException e) {
   // The machine was created but could not be validated — a network blip, say.
@@ -311,21 +314,61 @@ boundaries, not oversights.
 - **Enforcement.** A `ValidationCode` says what happened, not what your application should do
   about it.
 
+**Server-side preconditions**
+
+- **License-key authentication is off unless the policy enables it.** `AuthTransport.licenseKey`
+  requires the license's policy to set `authentication_strategy` to `LICENSE` or `MIXED`. It
+  defaults to `TOKEN`, and `NONE` is refused the same way, so a correct key answers
+  `401 LICENSE_NOT_ALLOWED` (`TamgaApiException.LicenseNotAllowedException`) on every call until
+  an operator changes the policy. It is a configuration precondition — not a retryable failure,
+  and not a reason to re-prompt for the key. A suspended license is refused with
+  `401 LICENSE_SUSPENDED`, and an expired one whose policy uses `REVOKE_ACCESS` with
+  `401 LICENSE_EXPIRED`; under the other three expiration strategies an expired license still
+  authenticates and validation reports `EXPIRED`.
+
 **Server-side limitations this SDK inherits**
 
 - **`.machine` files carry no signed expiry.** Only `.lic` files do. A machine file is bounded in
   practice by the `ttl` requested at checkout and by its fingerprint binding.
-- **10 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled for
+- **8 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled for
   forward-compatibility, and `ValidationCode.reachable()` reports which. Do not build behaviour on
-  an unreachable one.
-- **Only four `Scope` fields are enforced** — product, policy, user, environment. The other four
-  (`fingerprint`, `version`, `checksum`, `entitlements`) are sent, parsed, and then ignored.
+  an unreachable one. `ENTITLEMENTS_MISSING` and `FINGERPRINT_SCOPE_MISMATCH` moved into the
+  reachable set once the server started enforcing those two scope fields.
+- **Six `Scope` fields are enforced** — product, policy, user, environment, and now also
+  `fingerprint` and `entitlements`, which used to be parsed and ignored. `entitlements` takes
+  entitlement *codes*, compared case-insensitively, and is satisfied by policy-inherited
+  entitlements too.
+- **`Scope.withVersion` / `withChecksum` are deprecated and no longer sent.** The server rejects
+  the entire validate call with `422 SCOPE_NOT_SUPPORTED` when either field is present, so a
+  caller who sets one would get no verdict at all. Dropping them degrades that to a validate which
+  simply does not apply the constraint.
 - **The heartbeat window is a hardcoded 600s**, not driven by `policy.heartbeat_duration` despite
   that field existing. `HeartbeatScheduler` derives its interval from the real 600s.
-- **`hasEntitlement` reads a single page** of 100 entitlements, the server maximum. Paginate
-  `listEntitlements` yourself if a license may carry more.
-- **No auto-update or release-check API, and no RFC 9421 response-signature verification.** Neither
-  has a working server counterpart.
+- **The entitlements listing does not paginate at all.** It is a union of directly attached and
+  policy-inherited rows, which one keyset cursor cannot describe, so the server accepts
+  `page[after]` and never reads it. `listEntitlements` does not send it and always reports a null
+  next cursor; `limit` still works, capped at 100. A license with more than 100 effective
+  entitlements cannot be enumerated completely, which also bounds `hasEntitlement`: a `true` is
+  always authoritative, a `false` only below that ceiling. Keyset paging *does* work on
+  `listComponents`.
+- **An inherited entitlement is not fetchable by id.** `Entitlement.inherited()` flags the ones a
+  license holds through its policy; `getEntitlement` resolves direct attachments only and answers
+  404 for the rest, so list-then-get-each is not a valid pattern here.
+- **`resetHeartbeat` and `generateOfflineProof` always fail for a license key.** Both are gated on
+  role rather than permission and need an admin, developer, product or environment token. Since
+  `resetHeartbeat` is the only server-side way to unstick a wedged heartbeat job, that recovery
+  belongs to an operator, not to the embedded client.
+- **`quickValidate` writes `last_validated_at`** — unless the request carries an `Origin` header,
+  in which case the server skips the write and returns a byte-identical response, so the caller
+  cannot tell. This SDK never sets `Origin`, but a proxy that adds one silently disables the
+  write. `validateById` with `withSkipTouch(true)` is the only reliably side-effect-free check.
+- **Machine `memory` and `disk` are megabytes, not bytes.** Reporting bytes inflates the license's
+  running total by a factor of about a million and makes the next activation on that license fail
+  with `MEMORY_LIMIT_EXCEEDED`.
+- **No auto-update/release-check methods yet, and no RFC 9421 response-signature verification.**
+  The upgrade-check endpoint does work server-side — an earlier note here claiming it crashed was
+  wrong — it simply is not wrapped by this SDK yet. Artifact download is a separate matter: the
+  route exists but no credential this SDK issues is permitted to use it.
 
 **Transport hardening**
 

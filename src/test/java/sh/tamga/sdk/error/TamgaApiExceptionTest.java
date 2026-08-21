@@ -47,6 +47,51 @@ class TamgaApiExceptionTest {
   }
 
   @Test
+  void theFourCreateTimeLimitCodesMapToTheirOwnTypes() {
+    // POST /machines enforces the policy's limits. These arrive as 422s from a call the SDK used
+    // to document as enforcing nothing.
+    assertThat(dispatch("MACHINE_LIMIT_EXCEEDED", 422))
+        .isInstanceOf(TamgaApiException.MachineLimitExceededException.class);
+    assertThat(dispatch("CORE_LIMIT_EXCEEDED", 422))
+        .isInstanceOf(TamgaApiException.CoreLimitExceededException.class);
+    assertThat(dispatch("MEMORY_LIMIT_EXCEEDED", 422))
+        .isInstanceOf(TamgaApiException.MemoryLimitExceededException.class);
+    assertThat(dispatch("DISK_LIMIT_EXCEEDED", 422))
+        .isInstanceOf(TamgaApiException.DiskLimitExceededException.class);
+  }
+
+  @Test
+  void theProcessLimitCodeMapsToItsOwnType() {
+    assertThat(dispatch("TOO_MANY_PROCESSES", 422))
+        .isInstanceOf(TamgaApiException.TooManyProcessesException.class);
+  }
+
+  @Test
+  void theThreeLicenseAuthRejectionsMapToTheirOwnTypes() {
+    // All three are front-door rejections of a license-key credential, and none is retryable:
+    // LICENSE_NOT_ALLOWED in particular is a policy configuration precondition, not a bad key.
+    assertThat(dispatch("LICENSE_SUSPENDED", 401))
+        .isInstanceOf(TamgaApiException.LicenseSuspendedException.class);
+    assertThat(dispatch("LICENSE_EXPIRED", 401))
+        .isInstanceOf(TamgaApiException.LicenseExpiredException.class);
+    assertThat(dispatch("LICENSE_NOT_ALLOWED", 401))
+        .isInstanceOf(TamgaApiException.LicenseNotAllowedException.class);
+  }
+
+  @Test
+  void theOriginalThirteenMappingsAreStillLive() {
+    // NOT_FOUND, UNAUTHORIZED, FORBIDDEN and INTERNAL_SERVER_ERROR are baked into the server's
+    // own error constructors -- they are not superseded by the more specific codes above.
+    assertThat(dispatch("NOT_FOUND", 404).code()).isEqualTo("NOT_FOUND");
+    assertThat(dispatch("UNAUTHORIZED", 401))
+        .isInstanceOf(TamgaApiException.UnauthorizedException.class);
+    assertThat(dispatch("FORBIDDEN", 403))
+        .isInstanceOf(TamgaApiException.ForbiddenException.class);
+    assertThat(dispatch("INTERNAL_SERVER_ERROR", 500))
+        .isInstanceOf(TamgaApiException.InternalServerErrorException.class);
+  }
+
+  @Test
   void anUnmappedCodeFallsBackToTheGenericType() {
     TamgaApiException thrown = dispatch("SOMETHING_ADDED_LATER", 418);
 

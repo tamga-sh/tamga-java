@@ -11,10 +11,18 @@ import java.util.Map;
  * optional; an unset field means "no constraint, skip this check" and is omitted from the request
  * body entirely rather than sent as null.
  *
- * <p><b>Only {@code product}, {@code policy}, {@code user} and {@code environment} are enforced
- * server-side.</b> The remaining four ({@code fingerprint}, {@code version}, {@code checksum},
- * {@code entitlements}) are parsed and then silently ignored. They are modeled here for
- * forward-compatibility -- never document or surface them as constraints that currently work.
+ * <p><b>Six fields are enforced server-side:</b> {@code product}, {@code policy}, {@code user},
+ * {@code environment}, {@code fingerprint} and {@code entitlements}. The last two used to be
+ * parsed and ignored and are now genuinely checked, which makes
+ * {@link ValidationCode#FINGERPRINT_SCOPE_MISMATCH} and
+ * {@link ValidationCode#ENTITLEMENTS_MISSING} reachable verdicts.
+ *
+ * <p><b>{@code version} and {@code checksum} are refused outright.</b> The server answers
+ * {@code 422 SCOPE_NOT_SUPPORTED} the moment either is present, before any validation runs, so the
+ * caller gets no verdict at all rather than an ignored constraint. This class therefore no longer
+ * sends them: {@link #withVersion} and {@link #withChecksum} are deprecated and their values are
+ * dropped at serialization, which degrades a caller who sets one to a working validate rather than
+ * a hard failure.
  *
  * <p>Instances are immutable; each {@code with*} method returns a new object.
  */
@@ -69,30 +77,59 @@ public final class Scope {
     return new Scope(product, policy, user, value, fingerprint, version, checksum, entitlements);
   }
 
-  /** Returns a copy carrying a fingerprint. Sent but <b>not enforced</b> server-side. */
+  /**
+   * Returns a copy constrained to the given machine fingerprint. <b>Enforced</b> server-side: it
+   * must match some machine of the license, whatever that machine's heartbeat status, or
+   * validation answers {@link ValidationCode#FINGERPRINT_SCOPE_MISMATCH}.
+   */
   public Scope withFingerprint(String value) {
     return new Scope(product, policy, user, environment, value, version, checksum, entitlements);
   }
 
-  /** Returns a copy carrying a version. Sent but <b>not enforced</b> server-side. */
+  /**
+   * Returns a copy carrying a version.
+   *
+   * @deprecated The server rejects the entire validate call with {@code 422 SCOPE_NOT_SUPPORTED}
+   *     when this field is present, so the value is deliberately <b>not sent</b>. Setting it has
+   *     no effect. Retained so existing call sites keep compiling.
+   */
+  @Deprecated
   public Scope withVersion(String value) {
     return new Scope(product, policy, user, environment, fingerprint, value, checksum,
         entitlements);
   }
 
-  /** Returns a copy carrying a checksum. Sent but <b>not enforced</b> server-side. */
+  /**
+   * Returns a copy carrying a checksum.
+   *
+   * @deprecated The server rejects the entire validate call with {@code 422 SCOPE_NOT_SUPPORTED}
+   *     when this field is present, so the value is deliberately <b>not sent</b>. Setting it has
+   *     no effect. Retained so existing call sites keep compiling.
+   */
+  @Deprecated
   public Scope withChecksum(String value) {
     return new Scope(product, policy, user, environment, fingerprint, version, value,
         entitlements);
   }
 
-  /** Returns a copy carrying entitlement codes. Sent but <b>not enforced</b> server-side. */
+  /**
+   * Returns a copy requiring the license to hold every one of these entitlement <b>codes</b>, not
+   * entitlement ids. <b>Enforced</b> server-side: the comparison is case-insensitive and
+   * de-duplicated, policy-inherited entitlements count, and an empty list asserts nothing. A
+   * license missing any of them validates as {@link ValidationCode#ENTITLEMENTS_MISSING}.
+   */
   public Scope withEntitlements(List<String> values) {
     return new Scope(product, policy, user, environment, fingerprint, version, checksum,
         values == null ? null : new ArrayList<>(values));
   }
 
-  /** Returns whether every field is unset, in which case {@code scope} is omitted entirely. */
+  /**
+   * Returns whether every field is unset.
+   *
+   * <p>Note this still counts the two unsendable fields: a scope carrying only a {@code version}
+   * is not empty, yet renders to an empty map. Decide on {@link #toRequestMap} being empty rather
+   * than on this method when the question is "is there anything to send".
+   */
   public boolean isEmpty() {
     return product == null && policy == null && user == null && environment == null
         && fingerprint == null && version == null && checksum == null
@@ -101,7 +138,12 @@ public final class Scope {
 
   /**
    * Renders this scope as the request-body map, omitting every unset field. Returns an empty map
-   * when nothing is set; callers omit the {@code scope} key entirely in that case.
+   * when nothing is set -- or when only {@code version}/{@code checksum} are set; callers omit the
+   * {@code scope} key entirely in that case.
+   *
+   * <p>{@code version} and {@code checksum} are never rendered: sending either makes the server
+   * refuse the whole validate call with {@code 422 SCOPE_NOT_SUPPORTED}, so dropping them turns a
+   * total failure into a validate that simply does not apply that constraint.
    */
   public Map<String, Object> toRequestMap() {
     Map<String, Object> map = new LinkedHashMap<>();
@@ -110,8 +152,6 @@ public final class Scope {
     putIfPresent(map, "user", user);
     putIfPresent(map, "environment", environment);
     putIfPresent(map, "fingerprint", fingerprint);
-    putIfPresent(map, "version", version);
-    putIfPresent(map, "checksum", checksum);
     if (entitlements != null && !entitlements.isEmpty()) {
       map.put("entitlements", Collections.unmodifiableList(new ArrayList<>(entitlements)));
     }

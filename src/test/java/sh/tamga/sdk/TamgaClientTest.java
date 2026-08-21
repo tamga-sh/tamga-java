@@ -14,6 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import sh.tamga.sdk.error.TamgaActivationValidationException;
+import sh.tamga.sdk.error.TamgaApiException;
 import sh.tamga.sdk.error.TamgaMachineOverLimitException;
 import sh.tamga.sdk.model.ActivationResult;
 import sh.tamga.sdk.model.CheckOutOptions;
@@ -69,6 +70,27 @@ class TamgaClientTest {
         + "{\"key\":\"K\",\"status\":\"ACTIVE\",\"machines_count\":2,\"suspended\":false}},"
         + "\"meta\":{\"ts\":\"2026-08-20T10:00:00Z\",\"valid\":" + valid
         + ",\"detail\":\"d\",\"code\":\"" + code + "\"}}";
+  }
+
+  /**
+   * A JSON:API error document in the server's real wire shape.
+   *
+   * <p>{@code status} is a <b>string</b>, not a number -- the server renders
+   * {@code StatusCode::as_u16().to_string()} -- and every error carries an {@code id}. A fixture
+   * that gets this wrong stops proving anything about decoding.
+   */
+  private static String errorBody(String status, String code, String detail) {
+    return "{\"errors\":[{\"id\":\"01920000-0000-7000-8000-000000000001\",\"status\":\""
+        + status + "\",\"code\":\"" + code + "\",\"title\":\"Unprocessable Entity\",\"detail\":\""
+        + detail + "\"}]}";
+  }
+
+  private void enqueueError(int status, String code, String detail) {
+    server.enqueue(new MockResponse.Builder()
+        .code(status)
+        .addHeader("Content-Type", "application/vnd.api+json")
+        .body(errorBody(Integer.toString(status), code, detail))
+        .build());
   }
 
   private static String machineBody() {
@@ -269,8 +291,15 @@ class TamgaClientTest {
     assertThat(server.getRequestCount()).isEqualTo(2);
   }
 
+  /**
+   * The overage path: creation succeeds and the limit only appears at validation.
+   *
+   * <p>This is not a hypothetical. The server's create-time limit check runs through the policy's
+   * overage strategy, so under {@code ALLOW_ACCESS} or {@code ALLOW_1_25X_OVERAGE} the row is
+   * created and the verdict arrives later. Without the rollback that row keeps consuming a seat.
+   */
   @Test
-  void activateMachineRollsMachineBackWhenOverLimit() throws Exception {
+  void activateMachineRollsMachineBackWhenValidationReportsOverLimit() throws Exception {
     enqueueJson(machineBody());
     enqueueJson(licenseWithMeta("TOO_MANY_MACHINES", false));
     server.enqueue(new MockResponse.Builder().code(204).build());
@@ -285,10 +314,86 @@ class TamgaClientTest {
     server.takeRequest();
     server.takeRequest();
     RecordedRequest rollback = server.takeRequest();
-    // Creation enforces no limit, so without this delete the rejected activation would leave a
-    // row behind that still consumes a seat.
+    // A permissive overage strategy lets creation through, so without this delete the rejected
+    // activation would leave a row behind that still consumes a seat.
     assertThat(rollback.getMethod()).isEqualTo("DELETE");
     assertThat(rollback.getTarget()).isEqualTo("/v1/accounts/acct-123/machines/mach-1");
+    assertThat(server.getRequestCount()).isEqualTo(3);
+  }
+
+  @Test
+  void activateMachineReportsCreateTimeLimitRejectionWithoutDeleting() throws Exception {
+    // A strict policy rejects POST /machines outright. Nothing was created, so there is nothing to
+    // roll back -- issuing a DELETE here would target a machine id the caller never received.
+    enqueueError(422, "MACHINE_LIMIT_EXCEEDED", "This license has reached its machine limit");
+
+    assertThatThrownBy(
+        () -> client.activateMachine(CreateMachineOptions.of("fp-1", "lic-1"), null))
+        .isInstanceOf(TamgaMachineOverLimitException.class)
+        .satisfies(thrown -> {
+          TamgaMachineOverLimitException overLimit = (TamgaMachineOverLimitException) thrown;
+          // Reported in the validation vocabulary, so a caller handles one set of names rather
+          // than two chosen for them by a policy setting they do not control.
+          assertThat(overLimit.validationMeta().code())
+              .isEqualTo(ValidationCode.TOO_MANY_MACHINES);
+          assertThat(overLimit.validationMeta().valid()).isFalse();
+          assertThat(overLimit.rolledBack()).isFalse();
+          assertThat(overLimit.getCause())
+              .isInstanceOf(TamgaApiException.MachineLimitExceededException.class);
+        });
+
+    RecordedRequest create = server.takeRequest();
+    assertThat(create.getMethod()).isEqualTo("POST");
+    // Exactly one call: no validate, and above all no DELETE.
+    assertThat(server.getRequestCount()).isEqualTo(1);
+  }
+
+  @Test
+  void createTimeConflictIsNotTranslatedIntoAnOverLimitVerdict() throws Exception {
+    // Uniqueness is checked before the limits, so a re-activation answers 409 FINGERPRINT_TAKEN.
+    // Reporting that as "over limit" would tell a customer to buy seats for a machine they have
+    // already licensed.
+    enqueueError(409, "FINGERPRINT_TAKEN",
+        "This fingerprint is already activated within the policy's uniqueness scope");
+
+    assertThatThrownBy(
+        () -> client.activateMachine(CreateMachineOptions.of("fp-1", "lic-1"), null))
+        .isInstanceOf(TamgaApiException.FingerprintTakenException.class);
+
+    assertThat(server.getRequestCount()).isEqualTo(1);
+  }
+
+  @Test
+  void machineLimitRejectionDecodesFromTheRealWireShape() {
+    // status is the string "422", not the number 422.
+    enqueueError(422, "MEMORY_LIMIT_EXCEEDED", "This license has reached its memory limit");
+
+    assertThatThrownBy(() -> client.createMachine(CreateMachineOptions.of("fp-1", "lic-1")))
+        .isInstanceOf(TamgaApiException.MemoryLimitExceededException.class)
+        .satisfies(thrown -> {
+          TamgaApiException api = (TamgaApiException) thrown;
+          assertThat(api.httpStatus()).isEqualTo(422);
+          assertThat(api.error().status()).isEqualTo("422");
+          assertThat(api.error().id()).isNotNull();
+        });
+  }
+
+  @Test
+  void policyThatForbidsLicenseKeyAuthSurfacesAsItsOwnType() {
+    // authentication_strategy defaults to TOKEN, under which a perfectly valid license key is
+    // refused at the front door. Not retryable and not a bad credential -- a configuration
+    // precondition.
+    enqueueError(401, "LICENSE_NOT_ALLOWED",
+        "License key authentication is not allowed for this policy");
+
+    assertThatThrownBy(() -> client.quickValidate("lic-1"))
+        .isInstanceOf(TamgaApiException.LicenseNotAllowedException.class)
+        .satisfies(thrown -> {
+          TamgaApiException api = (TamgaApiException) thrown;
+          assertThat(api.httpStatus()).isEqualTo(401);
+          assertThat(api.error().status()).isEqualTo("401");
+          assertThat(api.code()).isEqualTo("LICENSE_NOT_ALLOWED");
+        });
   }
 
   @Test
@@ -369,29 +474,41 @@ class TamgaClientTest {
   }
 
   @Test
-  void listEntitlementsSynthesizesCursorOnlyForFullPage() throws Exception {
-    enqueueJson("{\"data\":[{\"id\":\"ent-1\",\"type\":\"entitlements\",\"attributes\":"
-        + "{\"code\":\"PRO\",\"name\":\"Pro\"}},{\"id\":\"ent-2\",\"type\":\"entitlements\","
-        + "\"attributes\":{\"code\":\"BETA\",\"name\":\"Beta\"}}]}");
+  void listComponentsSynthesizesCursorOnlyForFullPage() throws Exception {
+    enqueueJson("{\"data\":[{\"id\":\"comp-1\",\"type\":\"components\",\"attributes\":"
+        + "{\"fingerprint\":\"a\"}},{\"id\":\"comp-2\",\"type\":\"components\","
+        + "\"attributes\":{\"fingerprint\":\"b\"}}]}");
 
-    Page<Entitlement> page = client.listEntitlements("lic-1", ListOptions.ofLimit(2));
+    Page<Component> page = client.listComponents("mach-1", ListOptions.ofLimit(2));
 
     RecordedRequest request = server.takeRequest();
     assertThat(request.getUrl().queryParameter("limit")).isEqualTo("2");
     assertThat(page.items()).hasSize(2);
-    // A full page means there may be more, so the cursor is the last item's id.
-    assertThat(page.nextCursor()).isEqualTo("ent-2");
+    // A full page means there may be more, so the cursor is the last item's id. Keyset paging is
+    // genuinely honoured on this route, unlike on entitlements.
+    assertThat(page.nextCursor()).isEqualTo("comp-2");
   }
 
   @Test
   void shortPageEndsPagination() {
-    enqueueJson("{\"data\":[{\"id\":\"ent-1\",\"type\":\"entitlements\",\"attributes\":"
-        + "{\"code\":\"PRO\"}}]}");
+    enqueueJson("{\"data\":[{\"id\":\"comp-1\",\"type\":\"components\",\"attributes\":"
+        + "{\"fingerprint\":\"a\"}}]}");
 
-    Page<Entitlement> page = client.listEntitlements("lic-1", ListOptions.ofLimit(50));
+    Page<Component> page = client.listComponents("mach-1", ListOptions.ofLimit(50));
 
     assertThat(page.items()).hasSize(1);
     assertThat(page.nextCursor()).isNull();
+  }
+
+  @Test
+  void listingWithNoExplicitLimitStillSendsOne() throws Exception {
+    enqueueJson("{\"data\":[]}");
+
+    client.listComponents("mach-1", ListOptions.defaults());
+
+    // Left to the server this would be 25, and with no page metadata on the response there would
+    // be no way to tell a truncated page from a complete one.
+    assertThat(server.takeRequest().getUrl().queryParameter("limit")).isEqualTo("100");
   }
 
   @Test
@@ -401,6 +518,49 @@ class TamgaClientTest {
     client.listComponents("mach-1", ListOptions.ofLimit(10).after("comp-9"));
 
     assertThat(server.takeRequest().getUrl().queryParameter("page[after]")).isEqualTo("comp-9");
+  }
+
+  @Test
+  void entitlementsAreNeverPagedBecauseTheServerIgnoresTheCursor() throws Exception {
+    enqueueJson("{\"data\":[{\"id\":\"ent-1\",\"type\":\"entitlements\",\"attributes\":"
+        + "{\"code\":\"PRO\",\"name\":\"Pro\",\"inherited\":false}},{\"id\":\"ent-2\","
+        + "\"type\":\"entitlements\",\"attributes\":{\"code\":\"BETA\",\"name\":\"Beta\","
+        + "\"inherited\":true}}]}");
+
+    Page<Entitlement> page =
+        client.listEntitlements("lic-1", ListOptions.ofLimit(2).after("ent-0"));
+
+    RecordedRequest request = server.takeRequest();
+    assertThat(request.getUrl().queryParameter("limit")).isEqualTo("2");
+    // The listing is a union of direct and policy-inherited rows, which one keyset cursor cannot
+    // describe. The server reads page[after] into a field it never uses, so sending a cursor and
+    // reporting one back would only invite a loop refetching the same first page forever.
+    assertThat(request.getUrl().queryParameter("page[after]")).isNull();
+    assertThat(page.items()).hasSize(2);
+    assertThat(page.nextCursor()).isNull();
+  }
+
+  @Test
+  void anEntitlementReportsWhetherItIsInherited() {
+    enqueueJson("{\"data\":[{\"id\":\"ent-1\",\"type\":\"entitlements\",\"attributes\":"
+        + "{\"code\":\"PRO\",\"inherited\":false}},{\"id\":\"ent-2\",\"type\":"
+        + "\"entitlements\",\"attributes\":{\"code\":\"BETA\",\"inherited\":true}}]}");
+
+    Page<Entitlement> page = client.listEntitlements("lic-1", ListOptions.defaults());
+
+    // An inherited entitlement cannot be detached, and getEntitlement answers 404 for it.
+    assertThat(page.items().get(0).inherited()).isFalse();
+    assertThat(page.items().get(1).inherited()).isTrue();
+  }
+
+  @Test
+  void entitlementFromResponseWithoutTheFlagLeavesItUnknown() {
+    // Only the licence listing carries `inherited`; the account-, policy- and release-scoped
+    // responses have nothing to inherit from. Absent must not read as false.
+    enqueueJson("{\"data\":{\"id\":\"ent-1\",\"type\":\"entitlements\",\"attributes\":"
+        + "{\"code\":\"PRO\"}}}");
+
+    assertThat(client.getEntitlement("lic-1", "ent-1").inherited()).isNull();
   }
 
   @Test

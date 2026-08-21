@@ -7,9 +7,18 @@ import java.util.Map;
  * Options for registering a machine against a license. {@code fingerprint} and {@code licenseId}
  * are required; everything else is optional and omitted when unset.
  *
- * <p>Machine, core, memory and disk limits are <b>not</b> checked at creation time. They surface
- * only later, through validation. The machine row exists even when the license is already over its
- * limit -- see {@code TamgaClient.activateMachine}, which creates, validates, and rolls back.
+ * <p>Machine, core, memory and disk limits <b>are</b> checked at creation time, through the
+ * policy's overage strategy: a strict policy rejects the create with
+ * {@code 422 MACHINE_LIMIT_EXCEEDED} / {@code CORE_LIMIT_EXCEEDED} /
+ * {@code MEMORY_LIMIT_EXCEEDED} / {@code DISK_LIMIT_EXCEEDED}, while a permissive one
+ * ({@code ALLOW_ACCESS}, {@code ALLOW_1_25X_OVERAGE}) lets the row through and surfaces the limit
+ * only at validation. Both outcomes are possible, which is why
+ * {@code TamgaClient.activateMachine} handles the rejection <em>and</em> keeps the
+ * create-validate-rollback path.
+ *
+ * <p><b>{@code memory} and {@code disk} are megabytes, not bytes.</b> Reporting 16 GiB as
+ * {@code 17179869184} inflates the license's running total by a factor of 1,048,576 and makes the
+ * next activation on that license fail with {@code MEMORY_LIMIT_EXCEEDED}.
  */
 public final class CreateMachineOptions {
 
@@ -76,13 +85,13 @@ public final class CreateMachineOptions {
         memory, disk, metadata);
   }
 
-  /** Returns a copy reporting memory in bytes. */
+  /** Returns a copy reporting memory in <b>megabytes</b>. Not bytes -- see this class's note. */
   public CreateMachineOptions withMemory(Long value) {
     return new CreateMachineOptions(fingerprint, licenseId, name, ip, hostname, platform, cores,
         value, disk, metadata);
   }
 
-  /** Returns a copy reporting disk in bytes. */
+  /** Returns a copy reporting disk in <b>megabytes</b>. Not bytes -- see this class's note. */
   public CreateMachineOptions withDisk(Long value) {
     return new CreateMachineOptions(fingerprint, licenseId, name, ip, hostname, platform, cores,
         memory, value, metadata);
