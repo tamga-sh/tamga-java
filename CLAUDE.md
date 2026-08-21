@@ -162,9 +162,19 @@ source doc for the full set, including analytics/EE items that don't touch this 
     the artifact, and `Transport` caps a response at 32 MiB while the server accepts 1 GiB uploads.
     The `OkHttpClient` this SDK builds also refuses redirects outright, so the `303` would surface
     as an error rather than being followed, but a caller supplying their own client opts out of
-    that. Both behaviours are OkHttp's own and not portable — the same probe across this fleet's
-    runtimes produced three different answers, so do not carry this finding to another port
-    without re-measuring it there.
+    that. Both behaviours are OkHttp's own and not portable. Measured on the two clients a Java
+    application would actually use, both credential kinds on one request, first leg asserted:
+
+    | followed redirect | okhttp 5.4.0 | `java.net.http.HttpClient` (JDK 17) |
+    |---|---|---|
+    | cross-origin | `Authorization` stripped, **`Cookie` forwarded** | both stripped |
+    | same-origin | both forwarded | both forwarded |
+
+    Note the JDK client strips a directly-set `Cookie` cross-origin, which the fleet's working
+    generalisation ("platforms protect the header named `Authorization`, not credentials by
+    nature") does not predict — four other runtimes forward it. So do not carry any of these
+    findings to another port, or to another client in this one, without re-measuring. What every
+    measurement so far agrees on is the same-origin case: everything forwards.
   - **`redirectUrl` is server-chosen input, so it is validated before being handed back.** Absent,
     relative, or any scheme but `http`/`https` (`file:` being the obvious one) is refused with
     `TamgaTransportException`. `HttpUrl.parse` is the check: measured to return null for `file:`,
@@ -189,6 +199,38 @@ source doc for the full set, including analytics/EE items that don't touch this 
 
   `artifact.create` / `.update` / `.delete` remain absent from `Role::LicenseToken`, so create,
   update, delete and upload stay out of scope and are deliberately not modelled.
+- **The fingerprint a caller supplies is stored raw, so canonicalising it is the SDK's job.**
+  `fingerprint TEXT NOT NULL` — no length limit, no `CHECK`, no normalisation — unique per
+  `(license_id, fingerprint)`. All eight SDKs sent the caller's string byte-for-byte, so
+  `"ABC-123"`, `"abc-123"` and `" ABC-123 "` were three machines on three seats. `Fingerprint`
+  fixes the combining rule and nothing else. Two boundaries that must not move:
+  - **It reads no hardware identifiers, and must not start.** What identifies a machine is a
+    product decision — a cloned VM template shares them, a container has none, a replaced
+    motherboard changes them — and no default suits both a desktop app and a Kubernetes sidecar.
+  - **Do not add Unicode normalisation, even though the JDK has `java.text.Normalizer`.** NFC needs
+    a new dependency in Rust and Go and ICU or hand-rolled tables in C11, so a rule Java alone
+    could implement would make Java the port that silently disagrees with the other seven: one
+    machine, two fingerprints, two seats. The absence is a constraint, not an oversight.
+
+  Two Java-specific traps, both pinned by tests and both confirmed by mutation:
+  - `String.trim()` strips every character at or below U+0020, which is wider than the spec's
+    ASCII whitespace set, so it would swallow a leading NUL or BEL that must be **rejected**.
+    `String.strip()` is wrong the other way: it removes Unicode whitespace (U+2028, U+3000 — but
+    NOT U+00A0, which `Character.isWhitespace` rejects, so a test built only on U+00A0 passes
+    under `strip()` and proves nothing).
+  - **Read the vector file as UTF-8 explicitly.** Java's platform default is only UTF-8 from Java
+    18 (JEP 400), this artifact targets 11, and CI has a `windows-latest` leg on Temurin 17 where
+    the default is the ANSI code page. One vector holds a raw non-ASCII byte; every other is pure
+    ASCII, so a mis-decoding reader looks green everywhere except that one leg.
+    `FingerprintVectors.assertDecodedAsUtf8()` states the failure instead of leaving it as a digest
+    mismatch.
+
+  Note on the sort: the spec says bytewise over UTF-8, and the implementation does that, but **no
+  test here can distinguish it from `String.compareTo`**. Labels are unique and ASCII-printable, so
+  two components always differ at an ASCII position inside `label=`, before any value is reached —
+  and at an ASCII position byte order, UTF-16 code-unit order and code-point order coincide. The
+  sort mutations that do bite are label-only-vs-whole-component and case-insensitivity.
+
 - **Auth IS enforced server-side, and license-key auth is off by default.** The previous claim
   here ("no auth is enforced today") was false. Every endpoint this SDK calls is authenticated,
   and `Authorization: License <key>` additionally requires the license's policy to set

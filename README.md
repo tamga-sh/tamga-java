@@ -189,12 +189,25 @@ outright. Two measured reasons, either one sufficient:
 chooses that value and you would hand it straight to an HTTP client, so "it parsed" is not the test
 that matters.
 
+Your own fetch: both Java clients were measured, with both credential kinds on one request and the
+first leg asserted so "absent" means stripped rather than never sent.
+
+| followed redirect | okhttp 5.4.0 | `java.net.http.HttpClient` (JDK 17) |
+|---|---|---|
+| cross-origin | `Authorization` stripped, **`Cookie` forwarded** | both stripped |
+| same-origin | both forwarded | both forwarded |
+
+The two disagree on the cross-origin case, so which client you fetch with changes what leaks — and
+they agree that a **same-origin** redirect forwards everything. Send no credentials and the
+question does not arise.
+
 A `403` here is not necessarily a credential problem: the handler enforces the owning release's
 read gate as well as the `artifact.download` permission, so a product on the `CLOSED` distribution
 strategy refuses a licence key that genuinely holds the permission. Suspension, expiry and missing
 entitlements land on the same status with the same generic `FORBIDDEN` code.
 
-**Note:** this SDK generates no machine fingerprint for you, and embeds no account public key.
+**Note:** this SDK does not decide what your machine fingerprint is made of, and embeds no account
+public key.
 Producing a stable, device-specific fingerprint and deciding your grace-period and enforcement
 policy remain application concerns — see [Known gaps](#known-gaps).
 
@@ -236,6 +249,59 @@ public final class Quickstart {
   }
 }
 ```
+
+## Machine fingerprints
+
+The server stores `fingerprint TEXT NOT NULL` — no length limit, no `CHECK`, no normalisation —
+unique per `(license_id, fingerprint)`. Every SDK in this fleet sent your string byte-for-byte, so
+`"ABC-123"`, `"abc-123"` and `" ABC-123 "` were three machines on three seats of one license. A
+trailing newline off a config file or a shelled-out command is the usual way that happens.
+
+`Fingerprint` combines caller-chosen components into one canonical string, identically in all eight
+SDKs:
+
+```java
+import sh.tamga.sdk.model.Fingerprint;
+
+String fingerprint = Fingerprint.builder()
+    .add("machine-id", readMachineId())   // whatever your product decides identifies a machine
+    .add("disk", diskSerial())
+    .build();                             // 64 lowercase hex characters
+
+client.activateMachine(CreateMachineOptions.of(fingerprint, licenseId), null);
+```
+
+**It reads no hardware identifiers.** What identifies a machine is a product decision — a cloned VM
+template shares its identifiers, a container has none, a replaced motherboard changes them — so the
+components are yours and this only fixes how they are combined.
+
+The rule:
+
+```
+fingerprint = lowercase_hex(SHA-256(UTF-8(canonical)))
+canonical   = "tamga-fingerprint-v1" US join(US, sort_bytewise(label + "=" + trimmed_value))
+```
+
+`US` is U+001F, one byte. The literal prefix is a domain separator, so a future v2 rule cannot
+collide with v1 output.
+
+- **Order does not matter** — components are sorted, so the order you add them in is your own
+  convenience.
+- **Whitespace is trimmed from values**, using the spec's ASCII set (space, tab, CR, LF, VT, FF).
+  Not `String.trim()`, which strips everything at or below U+0020 and would swallow a leading NUL
+  that must be *rejected*; not `String.strip()`, which strips Unicode whitespace that must survive.
+- **Case is preserved.** Lowercasing a base64 or hex identifier corrupts it.
+- **Values are not Unicode-normalised, deliberately.** The JDK has `java.text.Normalizer` and this
+  does not call it: NFC needs a new dependency in Rust and Go, and ICU or hand-rolled tables in
+  C11. A rule eight ports cannot implement identically would give one machine two fingerprints
+  depending on which SDK the app was written in — silently consuming two seats. Normalise before
+  calling if your values can arrive in more than one form.
+
+Invalid input throws `IllegalArgumentException` and is never quietly repaired — stripping a control
+character or de-duplicating a repeated label would map two different machines onto one seat, which
+is the defect this exists to close. Labels must be non-empty ASCII printable (0x21–0x7E) excluding
+`=`, and unique; values may be empty, may contain `=`, may be non-ASCII, and may contain no ASCII
+control character once trimmed.
 
 ## Offline verification
 
@@ -469,8 +535,12 @@ boundaries, not oversights.
 
 **Left to your application**
 
-- **Machine fingerprints.** No SDK in the fleet generates one. Producing a stable, device-specific,
-  reasonably tamper-resistant fingerprint — and keeping it stable across reinstalls — is yours.
+- **Choosing what a machine fingerprint is made of.** No SDK in the fleet reads hardware
+  identifiers, and none will: a cloned VM template shares them, a container has none, a replaced
+  motherboard changes them, and no default is right for both a desktop app and a Kubernetes
+  sidecar. Producing a stable, device-specific, reasonably tamper-resistant set of components — and
+  keeping it stable across reinstalls — is yours. `Fingerprint` will combine them into one string
+  identically across all eight SDKs; see [Machine fingerprints](#machine-fingerprints).
 - **Embedding the account public key**, plus its rotation and key-id handling. Offline verification
   takes the key as a parameter; getting it into the binary is out of scope.
 - **Persistence.** Nothing is written to disk. Storing `.lic`/`.machine` files, deciding when to
