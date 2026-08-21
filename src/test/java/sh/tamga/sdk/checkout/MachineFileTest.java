@@ -413,6 +413,48 @@ class MachineFileTest {
   }
 
   /**
+   * The strict base64 decoder is load-bearing for the dot-separated {@code enc}, so pin it.
+   *
+   * <p>Reading {@code enc} as a single blob is wrong on every platform, but whether it FAILS
+   * depends on the decoder. A 12-byte nonce always encodes to exactly 16 unpadded base64
+   * characters, so {@code nonce_b64 + cipher_b64} is always a multiple of 4: a decoder that
+   * ignores out-of-alphabet characters drops the {@code '.'} and reconstructs
+   * {@code nonce || ciphertext || tag} byte-for-byte, and the old 12-byte slice then lands
+   * correctly by accident. That is why the CPython and Node SDKs in this fleet appeared to work
+   * while implementing the same misreading. Java is where it was visible only because {@code
+   * java.util.Base64.getDecoder()} rejects the separator.
+   *
+   * <p>Swapping {@code Base64Codec} to {@code getMimeDecoder()} -- a plausible "be liberal in what
+   * you accept" refactor -- would re-hide that and quietly soften every nonce/ciphertext guard
+   * around it. This test fails if anyone does.
+   */
+  @Test
+  void base64DecodingIsStrictSoJunkInsideEncIsRejectedNotIgnored() {
+    // The exact shape the accidental-success mechanism depends on.
+    assertThat(Base64Codec.decodeOrNull("AAAAAAAAAAAAAAAA.AAAA")).isNull();
+    assertThat(Base64Codec.decodeOrNull("AAAA AAAA")).isNull();
+
+    Ed25519PrivateKeyParameters key = generateEd25519Key();
+    byte[] aesKey = Hkdf.deriveMachineFileKey("TAMGA-LICENSE-KEY", "fp-abc123");
+    byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
+    String valid = CheckoutFixture.machineEncryptedEnc(json, aesKey);
+    int separator = valid.indexOf('.');
+    // A junk character inside the ciphertext half: a lenient decoder would silently skip it and
+    // hand back plaintext, so reaching anything other than a format error means the decoder went
+    // lenient.
+    String enc = valid.substring(0, separator + 3) + "*" + valid.substring(separator + 3);
+    String sig = CheckoutFixture.ed25519Sign(enc, key);
+
+    MachineFile file =
+        MachineFile.parse(CheckoutFixture.wrapMachinePem(enc, sig, "aes-256-gcm+ed25519+v2"));
+    byte[] publicKey = key.generatePublicKey().getEncoded();
+
+    assertThatThrownBy(() -> file.verifyAndDecrypt(LicenseScheme.ED25519_SIGN, publicKey,
+        "TAMGA-LICENSE-KEY", "fp-abc123"))
+        .isInstanceOf(TamgaCheckoutException.OfflineFileFormatException.class);
+  }
+
+  /**
    * A pre-v2 payload has no signed {@code meta}, so there is nothing to enforce {@code exp}
    * against. Rejecting it is the second line of defence behind the {@code alg} gate.
    */

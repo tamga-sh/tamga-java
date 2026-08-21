@@ -340,12 +340,30 @@ source doc for the full set, including analytics/EE items that don't touch this 
   led all eight SDKs in this fleet to implement it that way. Branch on the encoding prefix from
   `alg`, never on whether a dot happens to be present, and never decode any of it before the
   signature over the whole `enc` STRING has verified.
-- **The server does not distribute ECDSA or RSA public keys as X.509 SPKI.** `key_material.rs`
-  stores the ECDSA key as a raw 65-byte SEC1 uncompressed point, and `license_signing.rs`'s
-  `extract_public_key` returns RSA as PKCS#1 `RSAPublicKey` DER while the account column holds
-  SPKI. `Ecdsa`/`Rsa` accept both encodings per algorithm; an SPKI-only verifier could not consume
-  a real account key at all. The P-256 curve pin and the exact-2048-bit modulus check apply on
-  every path.
+- **`Base64Codec`'s use of the STRICT decoder is load-bearing — do not "helpfully" relax it.**
+  Reading the dot-separated `enc` as one blob is wrong everywhere, but whether it *fails* depends
+  entirely on the decoder. A 12-byte nonce always encodes to exactly 16 unpadded base64 characters,
+  so `nonce_b64 + cipher_b64` is always a multiple of 4 and a decoder that ignores out-of-alphabet
+  characters silently drops the `.` and reconstructs `nonce‖ciphertext‖tag` byte-for-byte — the old
+  12-byte slice then lands correctly by accident. Measured on all four encrypted fixtures: 16 + 896
+  = 912 chars, and a lenient decode reproduces the exact plaintext every time. That is why the
+  sibling CPython and Node SDKs appeared to work. Java is only where the bug was *visible*, because
+  `java.util.Base64.getDecoder()` rejects the `.`. Switching any of this to `getMimeDecoder()` would
+  re-hide it and quietly soften the nonce/ciphertext guards; `MachineFileTest` pins the strict
+  behaviour for exactly that reason.
+- **Public-key encodings differ per algorithm and per server endpoint — and ECDSA is never SPKI.**
+  `accounts.ecdsa_public_key` holds `ecdsa_pair.public_key().as_ref()`, a raw 65-byte SEC1
+  uncompressed point, so an SPKI-only ECDSA verifier cannot consume a real account key at all —
+  that one was a genuine defect here. RSA is subtler and is NOT a defect: `accounts.public_key`
+  holds `as_der()`, i.e. real SPKI (294 bytes), which this SDK already parsed, while
+  `license_signing.rs`'s `extract_public_key` returns PKCS#1 `RSAPublicKey` (270 bytes) — the form
+  the machine-file fixtures carry, and the form the server's own `verify` helper expects. Both are
+  legitimate distribution paths, so `Ecdsa`/`Rsa` accept both encodings per algorithm rather than
+  guessing which endpoint a caller used. The P-256 curve pin, the on-curve check and the
+  exact-2048-bit modulus check apply on every path.
+  Upstream note: the server test `rsa_public_key_is_spki_der` asserts only `len > 256`, which both
+  270-byte PKCS#1 and 294-byte SPKI satisfy — so it passes while asserting the opposite of what its
+  name claims, and cannot catch this discrepancy.
 - **`RSA_2048_JWT_RS256` is rejected for machine files.** `MachineFile.verify` throws
   `TamgaCheckoutException.SchemeNotSupportedException` before attempting any verification — and
   before `alg` is even parsed — matching the server's `422 SCHEME_NOT_SUPPORTED`. No JWT
