@@ -390,6 +390,72 @@ source doc for the full set, including analytics/EE items that don't touch this 
   covers a specific server-produced key order, recursively alphabetical at every nesting level
   (matching `serde_json`'s `BTreeMap`-backed output) — NOT literal source/insertion order. See
   `OfflineProof.java`'s `CRITICAL:` note and `model/CanonicalJson.java`.
+- **`check_in_interval`'s wire values are adverbs, not nouns.** The server's accepted set is
+  `["daily", "weekly", "monthly", "yearly"]` (`policies/enums.rs:27`), pinned by the identical list
+  in the `policies` table's `CHECK` constraint and by the server's own
+  `enum_lists_match_the_database` test. This SDK mapped `Policy.CheckInInterval` to
+  `day`/`week`/`month`/`year`, so **every real policy decoded to `null`** — invisible until the
+  policy read endpoints landed and something finally saw the field on the wire. The fleet contract
+  document says lowercase nouns too and is wrong on the same point. `fromWireValue` accepts both
+  spellings; `wireValue()` returns the adverb.
+- **`listMachines` pages by OFFSET, and it is the only listing here that does.** It takes
+  `page[number]`/`page[size]` (aliases `page`/`limit`), default size 25, clamped to 100, and
+  answers a real `meta.page`. `listComponents` and `listMachineProcesses` are keyset (`limit` +
+  `page[after]`, no metadata, cursor synthesized from a full page), and `listEntitlements` is
+  neither. Hence `OffsetPage` alongside `Page` — do not merge them. **The `meta.page` keys mix
+  casings**: `number`, `size` and `total` are bare, `total_pages` is renamed to `totalPages`
+  (`shared/list_query.rs`), so a decoder assuming one convention reads three fields and silently
+  misses the fourth.
+- **There is no fingerprint filter on the machine collection.** The accepted filters are
+  `filter[license]`, `filter[owner]`, `filter[group]`, `filter[platform]` and the free-text
+  `filter[q]` — and `filter[q]` is a case-insensitive `ILIKE %term%` across `m.name`,
+  `m.hostname` **and** `m.fingerprint`. So it narrows, it does not identify:
+  `findMachineByFingerprint` sends it and then compares `fingerprint` exactly on the rows that
+  return. A machine that merely *contains* the fingerprint in its hostname is not the machine.
+- **`getPolicy` is always 403 for a license key; `getLicensePolicy` is not.** `policy.read` is
+  absent from the `LicenseToken` permission set (`authz/mod.rs:236-261`), and
+  `GET /policies/{id}` requires it. `GET /licenses/{id}/policy` is gated on `license.read`
+  instead, which the license token does hold. Both are exposed, and the Javadoc on each points at
+  the other; anything running under a license key wants the nested one.
+- **`PATCH /machines/{id}` is the counterexample to the write-vs-read rule.** The durable form of
+  the `DEAD` rule is "a response built off a write it just performed cannot say `DEAD`" — this
+  route is a write that can, because its `UPDATE ... RETURNING` sets none of the heartbeat columns,
+  so the status is judged against a clock it did not reset. The same `UPDATE` does not join
+  `policies`, so its `next_heartbeat_at` is the 600s fallback. A machine from this route is
+  therefore unusable for sizing a heartbeat interval, and `case DEAD` against it is reachable.
+- **Machine and license reads are not confined to the caller's own license.** No machine route
+  applies `require_license_scope`, and neither does `GET /licenses/{id}`, which additionally
+  returns `attributes.key` in plain text. A credential with `license.read`/`machine.read` can
+  therefore read every license and machine in the account. Reported upstream; no client can close
+  it. **Do not describe `getLicense`/`getMachine` as scoped** — the Javadoc on both says so
+  explicitly for that reason.
+- **The release resource is camelCase, alone in this API.** `ReleaseAttributes` carries
+  `#[serde(rename_all = "camelCase")]`, which no other serializer does, so the owning product
+  arrives as `productId`, not `product_id`. Reading the house style yields `null` and nothing else
+  complains. The two timestamps are renamed individually on top of that and stay
+  `created`/`updated`. `EndpointModelsTest` pins both halves.
+- **`GET /v1/health` is not under the account prefix and is not JSON:API.** It answers a flat
+  `{status, version, uptime_secs}`, so it must not go through the envelope decoder. Reaching it at
+  all needed `Transport` to be able to build a URL without `/v1/accounts/{accountId}` — that
+  unconditional prefix, not the server, is why no SDK in this fleet could call it. Diagnostic
+  value: it is exempt from both the auth gate and the host-header check, so if every other call is
+  answering `403` "The Host header does not match any configured host" and this one succeeds, the
+  fault is `TAMGA_ALLOWED_HOSTS`, not the credential. The converse does not hold.
+- **Nothing reaps process rows, so `deleteProcess` is not optional.** The server's reaper for
+  expired processes is dead code, so a row created by `createProcess` outlives the process it
+  describes and keeps counting against `TOO_MANY_PROCESSES`. An application that registers a
+  process per run and never deletes one accumulates rows until activation fails on a limit no
+  running process is using. `ProcessHeartbeatScheduler.dispose()` pairs stop-and-delete;
+  `close()` deliberately does not delete, because it runs implicitly at the end of a
+  try-with-resources block and a scoped block must not silently destroy server state.
+- **`Component` and `Process` responses ARE JSON:API-enveloped** — `{"data":{"type","id",
+  "attributes":{…}}}` — even though their *request* bodies are flat. tamga-dotnet deserialized
+  those bodies straight into its model and returned empty ids and fingerprints on every call, with
+  its own fixtures encoding the wrong shape so CI stayed green. This SDK decodes them through
+  `Component.fromResourceNode`/`Process.fromResourceNode`, which read `id` off the resource and
+  the rest off `attributes`, and its fixtures carry the enveloped shape and assert real values —
+  so a regression to flat decoding fails the tests rather than passing quietly. Verified, not
+  assumed; do not "simplify" either decode path.
 
 ## Testing
 
