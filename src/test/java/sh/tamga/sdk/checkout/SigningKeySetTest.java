@@ -80,10 +80,13 @@ class SigningKeySetTest {
   }
 
   @Test
-  void mislabelledKeyStillVerifiesItsOwnFilesDespiteTheStrictLookup() throws IOException {
-    // What the strict rule does NOT cost. Keys are tried against the signature before any id is
-    // consulted, so the served-id rule only decides which error a file that verified under no key
-    // reports -- it never decides whether a genuine file verifies.
+  void findReturnsTheKeyBehindMislabelledServedIds() throws IOException {
+    // Renamed. This was called mislabelledKeyStillVerifiesItsOwnFilesDespiteTheStrictLookup and
+    // claimed to cover the verification path, which it never reaches -- it looks a key up in a set
+    // and nothing signs or verifies anything. Measured: the kid-first mutation that claim exists
+    // to catch left it green. The claim now lives in SigningKeyRotationTest, against a real file,
+    // where it dies under that mutation. What is left here is what this test actually did: the
+    // entry behind a served id is retrievable and carries the key bytes, mislabelled or not.
     SigningKeySet set = SigningKeySet.of(
         Collections.singletonList(resource("deadbeefdeadbeef", "ed25519", ZERO_KEY, "active")));
 

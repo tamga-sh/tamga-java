@@ -224,6 +224,34 @@ class SigningKeyRotationTest {
     assertThat(verified.claims().keyId()).isEqualTo(Ed25519.UNPUBLISHED_ACCOUNT_KEY_ID);
   }
 
+  @Test
+  void mislabelledKeyStillVerifiesItsOwnFilesDespiteTheStrictLookup() {
+    // What the strict served-id lookup does NOT cost, asserted against a real file rather than
+    // against a map lookup. The account's published row carries the wrong id -- a server-side
+    // fault a client cannot fix -- while the file's kid names the id the key really has. Keys are
+    // tried against the signature before any id is consulted, so this still verifies, and the
+    // served-id rule only decides which error a file that verified under NO key would report.
+    //
+    // The version of this test in SigningKeySetTest asserted a lookup and never reached
+    // verifyWithClaims, so it stayed green under the kid-first mutation it names. This one dies
+    // under it: kid-first would look for "deadbeefdeadbeef", find no entry named by the file's
+    // kid, and refuse a file that is genuinely signed by a key in hand.
+    Ed25519PrivateKeyParameters signer = generateKey();
+    String realKeyId = Ed25519.keyId(publicKeyBase64(signer));
+    SigningKeySet keys = SigningKeySet.of(Collections.singletonList(
+        SigningKey.ed25519("deadbeefdeadbeef", publicKeyBase64(signer))));
+    String pem = licensePem(signer, realKeyId);
+
+    VerifiedLicenseFile verified =
+        LicenseFile.parse(pem).verifyWithClaims(keys, LICENSE_KEY, 1_767_225_600L);
+
+    assertThat(verified.license().id()).isEqualTo("lic_123");
+    assertThat(verified.claims().keyId()).isEqualTo(realKeyId);
+    // The entry that verified is the mislabelled one, reported under the id the server served.
+    assertThat(verified.key().keyId()).isEqualTo("deadbeefdeadbeef");
+    assertThat(keys.mismatchedKeyIds()).containsExactly("deadbeefdeadbeef");
+  }
+
   // ------------------------------------------------------ encrypted files
 
   @Test
