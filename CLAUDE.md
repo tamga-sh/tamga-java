@@ -265,27 +265,46 @@ source doc for the full set, including analytics/EE items that don't touch this 
   genuinely hardcoded, at a fixed `INTERVAL '30 seconds'` with no resurrection grace period.
 - **But this SDK's default ping interval still assumes the 600s fallback.**
   `HeartbeatScheduler.DEFAULT_INTERVAL` is a third of `WINDOW` (600s), so on a policy with a
-  shorter `heartbeat_duration` the default ping rate is too slow and the machine reads `DEAD`
-  between pings. Callers on such a policy must set the interval themselves. They cannot learn
-  their window from this SDK: it exposes no `getPolicy`/`getMachine`, and `Machine.nextHeartbeatAt`
-  is not a workaround — the server computes that field from the window joined onto the machine row,
-  and none of the reachable responses (activate, create, ping-heartbeat, reset-heartbeat) join the
-  policy, so it always reports the 600s fallback. Making the scheduler policy-aware needs a policy
-  read this SDK does not yet have; until then the window comes from out of band.
-- **`HEARTBEAT_STATUS == DEAD` is a staleness report, not a tombstone.** The earlier directive
-  ("DEAD means the row was culled, so re-activate instead of pinging") was false and is reversed.
-  `Machine::heartbeat_status*` derives the value from `last_heartbeat_at` against the window and
-  never reads `policy.require_heartbeat`; that column defaults to `FALSE`, and the cull job
-  early-returns on a policy that leaves it there (its claim query requires `AND p.require_heartbeat`
-  as well). **On a default policy nothing is ever culled**, so a machine reports `DEAD` forever with
-  its row and its seat still present. A ping to a `DEAD` machine also succeeds and revives it — the
-  write is a bare `SET last_heartbeat_at = NOW()` with no resurrection check, so
-  `heartbeat_resurrection_strategy` bounds the cull job and not the ping endpoint. Consequences for
-  every SDK here: a heartbeat scheduler must **keep pinging through `DEAD`** and must never stop,
-  return or short-circuit its loop on one (tamga-python shipped exactly that bug); the only
-  row-is-gone signal is a **404 from the ping itself**, which is where re-activation belongs.
+  shorter `heartbeat_duration` the default ping rate is too slow and the machine goes `DEAD`
+  between pings. Callers on such a policy must set the interval themselves. This SDK exposes no
+  `getPolicy`/`getMachine`, so the window is not directly readable — and `Machine.nextHeartbeatAt`
+  only helps on some routes. The server computes that field from the heartbeat window joined onto
+  the machine row: `check-out` and `generate-offline-proof` resolve the machine through a
+  policy-joined read and carry the true value (so `nextHeartbeatAt - lastHeartbeatAt` recovers the
+  window there), while activate/create, `ping-heartbeat` and `reset-heartbeat` are bare writes with
+  no join and always report the 600s fallback. Filed upstream as `tamga-api-internal#7`. Making the
+  scheduler policy-aware still needs a policy read this SDK does not yet have.
+- **A heartbeat scheduler must never stop on a status — any status.** The only row-is-gone signal
+  is a **404 from the ping itself**, which is where re-activation belongs. A stale machine is
+  always one successful ping away from `ALIVE`: the ping write is a bare
+  `SET last_heartbeat_at = NOW()` with no resurrection check, so `heartbeat_resurrection_strategy`
+  bounds the cull job and not the ping endpoint. Stopping, returning or short-circuiting the loop
+  on a status is what strands the machine (tamga-python shipped exactly that bug).
   `HeartbeatScheduler` never gates a tick on the previous outcome, and
   `HeartbeatSchedulerTest.schedulerKeepsPingingAcrossConsecutiveDeadReadings` pins that.
+- **A ping response can never report `DEAD` (M42).** Two directives have now been wrong here in
+  opposite directions, so state the mechanism, not a scenario. The original ("DEAD means the row
+  was culled, so re-activate instead of pinging") was false and was reversed. Its replacement kept
+  the right rule but justified it with "a `DEAD` reading from a ping", which is also unreachable:
+  `ping-heartbeat` writes `last_heartbeat_at = NOW()` and then derives `heartbeat_status` from that
+  same timestamp (`heartbeat_status_within`, `machines/model.rs:124-146`), so the measured age is
+  ~0 and the answer is always `ALIVE` or `RESURRECTED`. `reset-heartbeat` nulls the column
+  (`NOT_STARTED`), `create` never sets it (`NOT_STARTED`), and `validate_license.rs` never
+  constructs `ValidationCode::HeartbeatDead` at all. Any `case DEAD` branch in a tick callback is
+  therefore dead code — reframe or drop the branch, but **do not** delete the enum constant or the
+  model field, which are part of the wire model.
+- **`DEAD` is real, and in this SDK it is reachable — through the checkout family.** It means only
+  that the last ping is older than the window: `Machine::heartbeat_status*` derives it from
+  `last_heartbeat_at` and never reads `policy.require_heartbeat`, which defaults to `FALSE` and is
+  what the cull job requires (its claim query has `AND p.require_heartbeat`), so **on a default
+  policy nothing is ever culled** and a machine sits in `DEAD` forever with its row and its seat
+  still present. `check-out` and `generate-offline-proof` both resolve the machine via the
+  policy-joined `queries::find_by_id`, so their serialized `heartbeat_status` is computed against
+  the real window and can be `DEAD`: reachable here as `MachineFile.verifyAndDecrypt` (from
+  `checkOutMachine`) and `OfflineProofResult.machine()`. Note the fleet-wide M42 note lists only
+  ping/reset/create/validate and concludes `DEAD` is unobservable — that holds for those four
+  routes and for SDKs without checkout, but **not** for tamga-java. A dedicated machine read
+  (`GET /machines/{id}`) would also show it; this SDK does not expose one yet (M11/M36).
 - **Both checkout formats derive their AES key with HKDF-SHA256** (`crypto.Hkdf`), with different,
   non-interchangeable parameters: license files use salt `tamga:license-file-key-v1` / `info`
   `license-file` (`Hkdf.deriveLicenseFileKey`); machine files use salt

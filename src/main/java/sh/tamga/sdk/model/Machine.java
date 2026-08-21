@@ -129,10 +129,15 @@ public final class Machine {
   /**
    * Returns when the next heartbeat is expected, or {@code null}.
    *
-   * <p><b>Not a way to learn the policy's heartbeat window.</b> The server derives this field from
-   * the window joined onto the machine row, and none of the machine responses this SDK can reach
-   * (activate, create, ping-heartbeat, reset-heartbeat) perform that join -- so it always reflects
-   * the 600-second fallback, even on a policy whose {@code heartbeat_duration} is shorter.
+   * <p><b>Whether this reflects the real policy window depends on which call produced the
+   * machine.</b> The server derives the field from the heartbeat window joined onto the machine
+   * row, and only some routes perform that join. {@code check-out} and
+   * {@code generate-offline-proof} resolve the machine through a policy-joined read, so their
+   * machines carry the true window. {@code create}/activate, {@code ping-heartbeat} and
+   * {@code reset-heartbeat} are bare writes against {@code machines} with no join, so theirs
+   * always report the 600-second fallback, even on a policy whose {@code heartbeat_duration} is
+   * shorter. Subtracting {@link #lastHeartbeatAt()} from this field recovers the effective window
+   * on the first group only.
    */
   public Instant nextHeartbeatAt() {
     return nextHeartbeatAt;

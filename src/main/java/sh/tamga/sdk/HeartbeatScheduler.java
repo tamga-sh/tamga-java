@@ -14,24 +14,22 @@ import sh.tamga.sdk.model.Machine;
  *
  * <p>The server's heartbeat window is the policy's {@code heartbeat_duration} when that field is
  * set, and 600 seconds only when it is null. {@link #DEFAULT_INTERVAL} is a third of that 600s
- * fallback, which tolerates two consecutive failed pings before the machine starts reporting
- * {@link HeartbeatStatus#DEAD} -- on a policy that leaves {@code heartbeat_duration} unset.
+ * fallback, which tolerates two consecutive failed pings before the machine's window lapses --
+ * on a policy that leaves {@code heartbeat_duration} unset.
  *
  * <p><b>The default interval does not adapt to a shorter policy window.</b> On a policy whose
- * {@code heartbeat_duration} is below 600 seconds the default ping rate is too slow, and the
- * machine will read {@link HeartbeatStatus#DEAD} between pings. Such callers must set
- * {@link Builder#interval(Duration)} themselves. This SDK cannot tell them what their window is:
- * it exposes no policy read, and {@link Machine#nextHeartbeatAt()} is no substitute -- see that
- * method. The window has to be learned out of band.
+ * {@code heartbeat_duration} is below 600 seconds the default ping rate is too slow and the
+ * machine goes {@link HeartbeatStatus#DEAD} between pings -- server-side state, not something the
+ * ping response ever shows. Such callers must set {@link Builder#interval(Duration)} themselves.
+ * This SDK exposes no policy read, so the window has to come from somewhere else:
+ * {@link Machine#nextHeartbeatAt()} carries the true window only on the checkout-family
+ * responses, never on a ping. See that method.
  *
  * <pre>{@code
  * HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, machineId)
  *     .onTick((machine, error) -> {
- *       // DEAD is a staleness report, not a tombstone. This very ping already revived the
- *       // machine, so log it and let the scheduler carry on -- never stop or re-activate here.
- *       if (machine != null && machine.heartbeatStatus() == HeartbeatStatus.DEAD) {
- *         logStaleHeartbeat();
- *       }
+ *       // Do not branch on the status to stop the loop. A ping answers ALIVE or RESURRECTED and
+ *       // nothing else, so a `== DEAD` branch here would simply be dead code (see below).
  *       // A 404 is the only signal that the row is actually gone. Re-activate off that.
  *       if (error instanceof TamgaApiException.NotFoundException) {
  *         reactivate();
@@ -41,15 +39,29 @@ import sh.tamga.sdk.model.Machine;
  * scheduler.start();
  * }</pre>
  *
- * <p><b>{@link HeartbeatStatus#DEAD} does not mean the machine was culled.</b> It means only that
- * the last ping is older than the window. The server computes {@code heartbeat_status} from
- * {@code last_heartbeat_at} against that window and never consults the policy's
- * {@code require_heartbeat}, which defaults to {@code false} -- and the cull job early-returns
- * unless that flag is set. On a default policy nothing is ever culled, so a machine can report
- * {@code DEAD} indefinitely while its row and its seat are both still there. Pinging a
- * {@code DEAD} machine also succeeds and revives it: the write is a bare
- * {@code SET last_heartbeat_at = NOW()} with no resurrection check. So <b>keep pinging through
- * {@code DEAD}</b> -- this scheduler does, and stopping is what would actually lose the machine.
+ * <p><b>Never stop the loop on a status -- any status.</b> The only terminal signal from a ping
+ * is a 404. This scheduler never gates a tick on the previous outcome, and stopping is what would
+ * actually lose the machine: a stale machine is always one successful ping away from
+ * {@link HeartbeatStatus#ALIVE} again, because the ping write is a bare
+ * {@code SET last_heartbeat_at = NOW()} with no resurrection check.
+ *
+ * <p><b>A ping response can never say {@link HeartbeatStatus#DEAD}.</b> The endpoint writes
+ * {@code last_heartbeat_at = NOW()} and then derives {@code heartbeat_status} from that same
+ * timestamp, so the age it measures is ~0 and the answer is always {@code ALIVE} or
+ * {@code RESURRECTED}. Earlier guidance here framed the keep-pinging rule around "a {@code DEAD}
+ * reading from a ping" -- an observation that cannot occur on this route. The rule is right; that
+ * premise was not.
+ *
+ * <p><b>{@code DEAD} is still a real server state</b>, just not one a ping reports. It means the
+ * last ping is older than the window, nothing more: the server derives it from
+ * {@code last_heartbeat_at} and never consults the policy's {@code require_heartbeat}, which
+ * defaults to {@code false} and is exactly what the cull job requires before removing anything.
+ * On a default policy nothing is ever culled, so a machine can sit in {@code DEAD} indefinitely
+ * with its row and its seat both still there. In this SDK it surfaces only through the
+ * checkout-family reads, which resolve the machine through a policy-joined query:
+ * {@link sh.tamga.sdk.checkout.MachineFile#verifyAndDecrypt} and
+ * {@link TamgaClient#generateOfflineProof}. A dedicated machine read would show it too; this SDK
+ * does not expose one yet.
  *
  * <p><b>A 404 from the ping is the row-is-gone signal.</b> That, not {@code DEAD}, is what
  * re-activation belongs on. It arrives in the callback's {@code error} argument as a
@@ -159,10 +171,11 @@ public final class HeartbeatScheduler implements AutoCloseable {
   /**
    * Sends one ping and reports the outcome. Package-private so tests can drive it directly.
    *
-   * <p>The outcome never gates the next tick. A {@link HeartbeatStatus#DEAD} reading in particular
-   * is not a stop condition -- it only says the previous ping was older than the window, and the
-   * ping that observed it has already revived the machine. Short-circuiting the loop on
-   * {@code DEAD} would strand a machine whose row is still very much alive.
+   * <p>The outcome never gates the next tick, and no status is a stop condition. A ping response
+   * cannot even carry {@link HeartbeatStatus#DEAD} -- the endpoint writes
+   * {@code last_heartbeat_at = NOW()} before deriving the status from it -- so short-circuiting on
+   * that value would be unreachable code, and short-circuiting on any status this SDK does not yet
+   * know about is what would strand a machine whose row is still very much alive.
    */
   void tick() {
     Machine machine = null;

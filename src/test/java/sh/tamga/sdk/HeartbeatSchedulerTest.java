@@ -93,8 +93,10 @@ class HeartbeatSchedulerTest {
 
   @Test
   void deadReadingIsNotAnErrorAndStillCarriesTheMachine() {
-    // The row-is-gone signal is a 404 from the ping, not a DEAD reading: a DEAD ping is a normal
-    // 200 carrying a machine, so `error` stays null and re-activation must not fire.
+    // Synthetic status: the real ping-heartbeat endpoint cannot answer DEAD, since it writes
+    // last_heartbeat_at = NOW() before deriving the status from that same timestamp. What this
+    // pins is the routing rule, which is real: any 200 carrying a machine leaves `error` null
+    // whatever the status, so re-activation hangs off a 404 and never off a status value.
     enqueueMachine("DEAD");
     AtomicReference<Machine> machineSeen = new AtomicReference<>();
     AtomicReference<Throwable> errorSeen = new AtomicReference<>();
@@ -114,12 +116,13 @@ class HeartbeatSchedulerTest {
 
   @Test
   void schedulerKeepsPingingAcrossConsecutiveDeadReadings() throws Exception {
-    // Regression: DEAD is a staleness report, not a tombstone. `require_heartbeat` defaults to
-    // FALSE and the server's cull job early-returns without it, so on a default policy the row is
-    // never culled and reports DEAD indefinitely -- while every ping still succeeds and revives
-    // it. A loop that stops, returns or short-circuits on a DEAD reading therefore strands a
-    // machine that was one ping away from being ALIVE again; tamga-python shipped exactly that
-    // bug. Three DEAD readings in a row must not perturb the timer at all, and the fourth ping
+    // Regression: the loop must not stop on any status. DEAD stands in here for an unexpected
+    // status -- the real ping-heartbeat endpoint cannot produce it, because it writes
+    // last_heartbeat_at = NOW() and then derives the status from that same timestamp, so it
+    // always answers ALIVE or RESURRECTED. The defensive property being pinned is real
+    // regardless: a loop that stops, returns or short-circuits on a status it did not expect
+    // strands a machine that was one ping away from ALIVE, and tamga-python shipped exactly that
+    // bug. Three such readings in a row must not perturb the timer at all, and the fourth ping
     // must land and come back ALIVE.
     for (int i = 0; i < 3; i++) {
       enqueueMachine("DEAD");

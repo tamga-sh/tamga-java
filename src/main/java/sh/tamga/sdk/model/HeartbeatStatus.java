@@ -18,10 +18,19 @@ public enum HeartbeatStatus {
    * <p>It does not mean the machine was culled, deleted or deactivated. The server derives this
    * purely from {@code last_heartbeat_at} against the window and never consults the policy's
    * {@code require_heartbeat}, which defaults to {@code false} and is what the cull job requires
-   * before it removes anything -- so on a default policy the row is never culled and reports
-   * {@code DEAD} indefinitely, seat still consumed. A ping to a {@code DEAD} machine succeeds and
-   * revives it. Keep pinging; treat a 404 from the ping, not this status, as the row-is-gone
-   * signal.
+   * before it removes anything -- so on a default policy the row is never culled and sits in
+   * {@code DEAD} indefinitely, seat still consumed.
+   *
+   * <p><b>A ping response never carries this value.</b> {@code ping-heartbeat} writes
+   * {@code last_heartbeat_at = NOW()} and then derives the status from that same timestamp, so it
+   * always answers {@link #ALIVE} or {@link #RESURRECTED}. In this SDK {@code DEAD} is reachable
+   * only through the checkout-family reads, which resolve the machine through a policy-joined
+   * query: {@link sh.tamga.sdk.checkout.MachineFile#verifyAndDecrypt} and
+   * {@link sh.tamga.sdk.TamgaClient#generateOfflineProof}. A dedicated machine read would show it
+   * too; this SDK does not expose one yet.
+   *
+   * <p>None of that relaxes the scheduler rule: keep pinging, never stop on a status, and treat a
+   * 404 from the ping -- not this value -- as the row-is-gone signal.
    */
   DEAD("DEAD"),
   /**

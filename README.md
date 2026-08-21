@@ -352,18 +352,32 @@ boundaries, not oversights.
   window is `policy.heartbeat_duration` when the policy sets it, and 600s only when it is null.
   **`HeartbeatScheduler`'s default interval is still computed against the 600s fallback**, so on a
   policy with a shorter window the default ping rate is too slow and machines will read `DEAD`
-  between pings. Callers on such a policy must pass their own `interval(...)` — and today they must
-  learn their window out of band, because this SDK exposes no way to read the policy.
-  `Machine.nextHeartbeatAt()` does not help: none of the machine responses this client can reach
-  join the policy, so that field always reports the 600s fallback too.
-- **`HeartbeatStatus.DEAD` does not mean the machine was culled.** It means only that the last ping
-  is older than the window. The server computes it from `last_heartbeat_at` alone and never
-  consults `policy.require_heartbeat`, which defaults to `false` and is exactly what the cull job
-  requires before it removes anything — so on a default policy nothing is ever culled and a machine
-  reports `DEAD` indefinitely with its row and its seat still in place. Pinging a `DEAD` machine
-  succeeds and revives it (the write is a bare `SET last_heartbeat_at = NOW()` with no resurrection
-  check), so a scheduler must keep pinging through `DEAD`. The row-is-gone signal is a **404 from
-  the ping itself** (`TamgaApiException.NotFoundException`) — hang re-activation off that.
+  between pings. Callers on such a policy must pass their own `interval(...)`, and this SDK
+  exposes no way to read the policy directly. `Machine.nextHeartbeatAt()` reveals the window only
+  on some routes: `check-out` and `generate-offline-proof` resolve the machine through a
+  policy-joined read and carry the true value, so `nextHeartbeatAt - lastHeartbeatAt` recovers the
+  window there; `create`/activate, `ping-heartbeat` and `reset-heartbeat` are bare writes with no
+  join and always report the 600s fallback.
+- **A heartbeat scheduler must never stop on a status — any status.** The only terminal signal
+  from a ping is a **404** (`TamgaApiException.NotFoundException`), which means the row is gone;
+  hang re-activation off that. A stale machine is always one successful ping away from `ALIVE`,
+  because the ping write is a bare `SET last_heartbeat_at = NOW()` with no resurrection check, so
+  stopping is what would actually lose it.
+- **A ping response can never report `DEAD`.** `ping-heartbeat` writes `last_heartbeat_at = NOW()`
+  and then derives `heartbeat_status` from that same timestamp, so it always answers `ALIVE` or
+  `RESURRECTED`. An earlier version of the bullet above framed the keep-pinging rule around "a
+  `DEAD` reading from a ping" — the rule is right, but that observation cannot happen on that
+  route. `reset-heartbeat` and `create` likewise only ever yield `NOT_STARTED`, and `validate`
+  never returns `HEARTBEAT_DEAD` at all.
+- **`DEAD` is still a real server state**, just not one a ping shows, and it does not mean the
+  machine was culled. It means only that the last ping is older than the window: the server
+  computes it from `last_heartbeat_at` alone and never consults `policy.require_heartbeat`, which
+  defaults to `false` and is exactly what the cull job requires before it removes anything — so on
+  a default policy nothing is ever culled and a machine sits in `DEAD` indefinitely with its row
+  and its seat still in place. In this SDK it surfaces only through the checkout-family reads,
+  which resolve the machine through a policy-joined query: `MachineFile.verifyAndDecrypt` (from
+  `checkOutMachine`) and `generateOfflineProof`. A dedicated machine read would show it too; this
+  SDK does not expose one yet.
 - **The entitlements listing does not paginate at all.** It is a union of directly attached and
   policy-inherited rows, which one keyset cursor cannot describe, so the server accepts
   `page[after]` and never reads it. `listEntitlements` does not send it and always reports a null
