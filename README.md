@@ -106,6 +106,44 @@ try {
 }
 ```
 
+Re-activating on a later launch, with the ping interval sized from the policy rather than the
+600-second fallback:
+
+```java
+import sh.tamga.sdk.model.ActivationOptions;
+import sh.tamga.sdk.model.Policy;
+
+// A fingerprint is stable, so every launch after the first would otherwise get
+// 409 FINGERPRINT_TAKEN. This resolves that to the machine already registered.
+ActivationResult activation = client.activateMachine(
+    CreateMachineOptions.of(fingerprint, licenseId),
+    null,
+    ActivationOptions.defaults().reuseTakenFingerprint(true));
+
+// getLicensePolicy, not getPolicy: the standalone policy route needs a permission a
+// license key does not hold. `policy(...)` sets the interval to a third of the window.
+Policy policy = client.getLicensePolicy(licenseId);
+HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, activation.machine().id())
+    .policy(policy)
+    .build();
+scheduler.start();
+```
+
+Checking for an update. `204` means two different things server-side and the client cannot tell
+them apart, so report the negative case as "nothing available to you", not "you are up to date":
+
+```java
+import sh.tamga.sdk.model.UpgradeCheckOptions;
+import sh.tamga.sdk.model.UpgradeCheckResult;
+
+UpgradeCheckResult upgrade = client.checkForUpgrade(
+    UpgradeCheckOptions.of(productId, "darwin", "dmg", currentVersion, "stable"));
+
+if (upgrade.updateOffered()) {
+  offerUpdate(upgrade.release().version());
+}
+```
+
 **Note:** this SDK generates no machine fingerprint for you, and embeds no account public key.
 Producing a stable, device-specific fingerprint and deciding your grace-period and enforcement
 policy remain application concerns — see [Known gaps](#known-gaps).
@@ -376,12 +414,39 @@ boundaries, not oversights.
   window is `policy.heartbeat_duration` when the policy sets it, and 600s only when it is null.
   **`HeartbeatScheduler`'s default interval is still computed against the 600s fallback**, so on a
   policy with a shorter window the default ping rate is too slow and machines will read `DEAD`
-  between pings. Callers on such a policy must pass their own `interval(...)`, and this SDK
-  exposes no way to read the policy directly. `Machine.nextHeartbeatAt()` reveals the window only
-  on some routes: `check-out` and `generate-offline-proof` resolve the machine through a
-  policy-joined read and carry the true value, so `nextHeartbeatAt - lastHeartbeatAt` recovers the
-  window there; `create`/activate, `ping-heartbeat` and `reset-heartbeat` are bare writes with no
-  join and always report the 600s fallback.
+  between pings. Read the policy and size the interval from it —
+  `.policy(client.getLicensePolicy(licenseId))` on the builder does both. Use `getLicensePolicy`,
+  not `getPolicy`: the standalone policy route needs a permission a license key does not hold and
+  answers `403`, while the nested one is authorised as a license read.
+  `Machine.nextHeartbeatAt()` is not a substitute — it reveals the true window only on
+  `GET /machines/{id}`, the machine list, `check-out` and `generate-offline-proof`, while
+  `create`/activate, `ping-heartbeat`, `reset-heartbeat` and `PATCH /machines/{id}` report the
+  600s fallback, and nothing on the wire says which kind you are holding.
+
+  **The ping interval is floored at one second** — `HeartbeatScheduler.MINIMUM_INTERVAL`, applied
+  by `Builder.interval(...)`, `intervalForWindow(...)` and the process scheduler alike. A `500ms`
+  `Duration` becomes `1s`; `45s` is untouched. The parameter is a `Duration` while the policy
+  field is `heartbeat_duration` in **seconds**, so a hand-rolled unit conversion lands in the
+  clamped range by ordinary mistake. It is a floor rather than a check on what
+  `ScheduledExecutorService.scheduleAtFixedRate` refuses, because that method rejects a period of
+  `0` and honours a period of `1` *exactly*, at ~1000 pings a second — a rule guarding only what
+  the runtime refuses would clamp `0` and wave `1` through, which describes where a number came
+  from rather than what it does. Null, zero and negative still mean "unspecified" and keep the
+  `DEFAULT_INTERVAL` fallback.
+
+  ⚠️ **The server judges liveness on truncated whole seconds**, which is easy to restate
+  pessimistically. `heartbeat_status_within` compares
+  `(now - last_heartbeat_at).num_seconds() <= window_secs`, and chrono's `num_seconds()`
+  truncates, so a machine reads `DEAD` only once its age reaches `window_secs + 1` seconds — every
+  window carries one free second. A 1s window is therefore served comfortably by a 1s ping (2s of
+  slack, not zero), which is what makes a flat floor safe on short windows. What the floor *does*
+  cost is the `/3` divisor's promise of two tolerable consecutive losses: `heartbeat_duration` 3
+  is the first window where floor and divisor agree, 2 keeps one spare ping, 1 keeps none, and
+  steady state holds all three. The only window it cannot hold is `0`, whose entire grace *is*
+  that free second; chasing it would need a ~333ms ping, tying this SDK's request rate to a
+  truncation artifact rather than a protocol guarantee, so it deliberately does not. A negative
+  window is unserveable at any rate. The whole interaction is pinned window by window in
+  `SchedulerWindowTest`.
 - **A heartbeat scheduler must never stop on a status — any status.** The only terminal signal
   from a ping is a **404** (`TamgaApiException.NotFoundException`), which means the row is gone;
   hang re-activation off that. A stale machine is always one successful ping away from `ALIVE`,
@@ -400,8 +465,9 @@ boundaries, not oversights.
   a default policy nothing is ever culled and a machine sits in `DEAD` indefinitely with its row
   and its seat still in place. In this SDK it surfaces only through the checkout-family reads,
   which resolve the machine through a policy-joined query: `MachineFile.verifyAndDecrypt` (from
-  `checkOutMachine`) and `generateOfflineProof`. A dedicated machine read would show it too; this
-  SDK does not expose one yet.
+  `checkOutMachine`) and `generateOfflineProof`. `getMachine` and `listMachines` now show it
+  directly, as does `updateMachine` — a write, but one that resets no heartbeat column — so a
+  `case DEAD` branch against those is reachable rather than dead code.
 - **The entitlements listing does not paginate at all.** It is a union of directly attached and
   policy-inherited rows, which one keyset cursor cannot describe, so the server accepts
   `page[after]` and never reads it. `listEntitlements` does not send it and always reports a null
@@ -416,6 +482,40 @@ boundaries, not oversights.
   role rather than permission and need an admin, developer, product or environment token. Since
   `resetHeartbeat` is the only server-side way to unstick a wedged heartbeat job, that recovery
   belongs to an operator, not to the embedded client.
+- **Process rows are never reaped, so delete them yourself.** The server's reaper for expired
+  process registrations is not wired up: a row created by `createProcess` outlives the process it
+  describes and keeps counting against the license's process limit until something deletes it. Use
+  `deleteProcess`, or `ProcessHeartbeatScheduler.dispose()`, which stops pinging and deletes in one
+  call. `close()` deliberately only stops the timer, so a try-with-resources block never destroys
+  server state on its own.
+- **`listMachines` pages by offset; every other listing here does not.** It takes a page number and
+  size and returns `OffsetPage`, whose `hasNextPage()` is the server's own answer. `listComponents`
+  and `listMachineProcesses` are keyset and return `Page`, where the cursor is synthesized from a
+  full page. They are not interchangeable.
+- **There is no fingerprint filter on the machine collection.** The free-text filter is a substring
+  match across name, hostname *and* fingerprint, so it narrows but never identifies.
+  `findMachineByFingerprint` sends it and then compares the fingerprint exactly on the rows that
+  come back; a machine merely containing the fingerprint in its hostname is not a match.
+- **Re-activation is opt-in, and scoped to the license.** A stable fingerprint means an application
+  that activates on every launch gets `409 FINGERPRINT_TAKEN` on every launch after the first.
+  `activateMachine(options, scope, ActivationOptions.defaults().reuseTakenFingerprint(true))`
+  resolves that to the existing machine instead. A fingerprint held under a *different* license —
+  which the wider uniqueness strategies permit — still raises the conflict: that case is precisely
+  the seat-sharing the server refuses, and a machine resource carries no license id, so returning
+  one would leave you pinging a machine your license does not own. A reused machine is never rolled
+  back on an over-limit verdict, because its seat predates the call.
+- **`getLicense`, `getMachine` and `updateMachine` are not scoped to your own license.** The server
+  authorises them on a permission alone and applies no license-scope check, so a credential that
+  can call them reaches every license and machine in the account — and `getLicense` returns each
+  license's `key` in plain text. That is a server-side gap reported upstream; no client can close
+  it. Do not build a "read your own license" feature on it and describe it as isolated.
+- **`getPolicy` always fails for a license key.** It needs the `policy.read` permission, which a
+  license token does not carry, so it answers `403`. `getLicensePolicy(licenseId)` reaches the same
+  resource through a route authorised as a license read and works.
+- **`updateMachine` cannot clear a field.** The server merges with `COALESCE`, so an omitted field
+  and an explicit null both mean "leave unchanged". It is also the one write whose response can
+  still report `DEAD`, and whose `nextHeartbeatAt()` is the 600s fallback rather than the policy
+  window.
 - **`quickValidate` writes `last_validated_at`** — unless the request carries an `Origin` header,
   in which case the server skips the write and returns a byte-identical response, so the caller
   cannot tell. This SDK never sets `Origin`, but a proxy that adds one silently disables the
@@ -423,10 +523,15 @@ boundaries, not oversights.
 - **Machine `memory` and `disk` are megabytes, not bytes.** Reporting bytes inflates the license's
   running total by a factor of about a million and makes the next activation on that license fail
   with `MEMORY_LIMIT_EXCEEDED`.
-- **No auto-update/release-check methods yet, and no RFC 9421 response-signature verification.**
-  The upgrade-check endpoint does work server-side — an earlier note here claiming it crashed was
-  wrong — it simply is not wrapped by this SDK yet. Artifact download is a separate matter: the
-  route exists but no credential this SDK issues is permitted to use it.
+- **The upgrade check cannot tell you that you are up to date.** `checkForUpgrade` wraps
+  `GET /releases/actions/upgrade`, which answers `204` **both** when no newer release exists and
+  when one exists that this license is not entitled to — deliberately, so a refusal cannot leak
+  the existence of a build the caller may not have. `UpgradeCheckResult.updateOffered() == false`
+  therefore means *no update is available to you*, never *you are on the latest version*, and
+  there is no client-side way to separate them. A suspended license is the exception: it comes
+  back as `403` rather than being folded into the `204`. No download URL is returned — the
+  artifact route exists but no credential this SDK issues may use it. RFC 9421
+  response-signature verification is still not implemented.
 
 **Transport hardening**
 

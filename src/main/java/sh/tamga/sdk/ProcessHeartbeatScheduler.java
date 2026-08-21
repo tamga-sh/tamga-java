@@ -5,6 +5,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import sh.tamga.sdk.model.Process;
 
@@ -19,6 +20,10 @@ import sh.tamga.sdk.model.Process;
  * <p>That makes the tick callback more important here than for machines. A failed ping is much
  * closer to losing the process registration entirely, and the correct recovery is usually to
  * re-create the process rather than keep pinging a row that no longer exists.
+ *
+ * <p><b>{@link #close()} stops pinging; it does not delete the row.</b> Use {@link #dispose()} at
+ * shutdown when the process registration should go away with the process -- see that method for
+ * why leaving it behind is not harmless.
  */
 public final class ProcessHeartbeatScheduler implements AutoCloseable {
 
@@ -43,6 +48,16 @@ public final class ProcessHeartbeatScheduler implements AutoCloseable {
    * window rather than narrowing it.
    */
   private final Object lifecycleLock = new Object();
+  /**
+   * Claims the one deletion {@link #dispose()} is allowed to perform.
+   *
+   * <p>Deliberately not guarded by {@link #lifecycleLock}: the deletion is a network round trip,
+   * and holding the lifecycle monitor across it would block {@link #stop()} and {@link #running()}
+   * for the duration of an HTTP call. A compare-and-set claim gives the same "at most one DELETE"
+   * guarantee without a lock spanning I/O. The claim is released again if the delete throws, so a
+   * failed dispose stays retryable.
+   */
+  private final AtomicBoolean deletionClaimed = new AtomicBoolean();
 
   private ScheduledExecutorService executor;
 
@@ -91,9 +106,50 @@ public final class ProcessHeartbeatScheduler implements AutoCloseable {
     }
   }
 
+  /**
+   * Stops pinging. <b>Does not delete the process row</b> -- see {@link #dispose()}.
+   *
+   * <p>Deliberately kept to stopping the timer: {@code close()} runs implicitly at the end of a
+   * try-with-resources block, and a method that quietly performs a network write there would make
+   * a scoped block delete server state the caller never asked it to.
+   */
   @Override
   public void close() {
     stop();
+  }
+
+  /**
+   * Stops pinging <b>and deletes the process row</b>.
+   *
+   * <p><b>Something has to.</b> The server's reaper for expired process rows is not wired up, so a
+   * row created by {@code createProcess} survives the process it describes indefinitely and goes
+   * on counting against the license's process limit. An application that registers a process per
+   * run and never deletes one accumulates rows until activation starts failing on a limit no
+   * running process is actually using. Stopping the pings alone does not release anything.
+   *
+   * <p>At most one {@code DELETE} is ever issued: a second call, or a concurrent one that loses
+   * the race, returns without touching the network. A call that <b>fails</b> releases that claim
+   * again, so a dispose that hit a transient network error can simply be retried.
+   *
+   * <p>A tick already in flight when this is called may still complete its ping. That is harmless:
+   * it either lands before the delete, or answers {@code 404} afterwards, which the tick callback
+   * reports like any other failure.
+   *
+   * @throws sh.tamga.sdk.error.TamgaApiException if the server refused the deletion. A
+   *     {@link sh.tamga.sdk.error.TamgaApiException.NotFoundException} means the row was already
+   *     gone, which for a deletion is usually the outcome the caller wanted.
+   */
+  public void dispose() {
+    stop();
+    if (!deletionClaimed.compareAndSet(false, true)) {
+      return;
+    }
+    try {
+      client.deleteProcess(processId);
+    } catch (RuntimeException e) {
+      deletionClaimed.set(false);
+      throw e;
+    }
   }
 
   /** Returns whether the scheduler is currently running. */
@@ -101,6 +157,16 @@ public final class ProcessHeartbeatScheduler implements AutoCloseable {
     synchronized (lifecycleLock) {
       return executor != null;
     }
+  }
+
+  /**
+   * Returns the interval this scheduler pings at, after the
+   * {@link HeartbeatScheduler#MINIMUM_INTERVAL} floor and the {@link #DEFAULT_INTERVAL} fallback
+   * have been applied. Package-private so tests can assert the clamp without widening the
+   * published surface for it.
+   */
+  Duration interval() {
+    return interval;
   }
 
   /** Sends one ping and reports the outcome. Package-private so tests can drive it directly. */
@@ -136,12 +202,21 @@ public final class ProcessHeartbeatScheduler implements AutoCloseable {
     }
 
     /**
-     * Overrides the ping interval. A non-positive value falls back to
-     * {@link #DEFAULT_INTERVAL}.
+     * Overrides the ping interval. A null or non-positive value falls back to
+     * {@link #DEFAULT_INTERVAL}; a positive value below
+     * {@link HeartbeatScheduler#MINIMUM_INTERVAL} is raised to that floor.
+     *
+     * <p>The floor is the machine scheduler's constant rather than one of this class's own, so
+     * the fleet-wide number has a single definition here. It is comfortable against this
+     * scheduler's window either way: 30 seconds is hardcoded server-side, so even the floor
+     * leaves thirty pings inside it. The reason it is needed at all is that
+     * {@link java.util.concurrent.ScheduledExecutorService#scheduleAtFixedRate} honours a period
+     * of {@code 1} exactly -- an explicit sub-second interval here spins
+     * {@code POST /processes/&#123;id&#125;/actions/ping} just as fast as the machine route would.
      */
     public Builder interval(Duration value) {
       this.interval = value == null || value.isNegative() || value.isZero()
-          ? DEFAULT_INTERVAL : value;
+          ? DEFAULT_INTERVAL : HeartbeatScheduler.atLeastMinimumInterval(value);
       return this;
     }
 

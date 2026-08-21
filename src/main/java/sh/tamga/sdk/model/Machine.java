@@ -131,13 +131,29 @@ public final class Machine {
    *
    * <p><b>Whether this reflects the real policy window depends on which call produced the
    * machine.</b> The server derives the field from the heartbeat window joined onto the machine
-   * row, and only some routes perform that join. {@code check-out} and
-   * {@code generate-offline-proof} resolve the machine through a policy-joined read, so their
-   * machines carry the true window. {@code create}/activate, {@code ping-heartbeat} and
-   * {@code reset-heartbeat} are bare writes against {@code machines} with no join, so theirs
-   * always report the 600-second fallback, even on a policy whose {@code heartbeat_duration} is
-   * shorter. Subtracting {@link #lastHeartbeatAt()} from this field recovers the effective window
-   * on the first group only.
+   * row, and only some routes perform that join:
+   *
+   * <table border="1">
+   *   <caption>What each route's {@code next_heartbeat_at} is measured against</caption>
+   *   <tr><th>Route</th><th>Window used</th></tr>
+   *   <tr><td>{@code GET /machines/{id}}, {@code GET /machines}</td>
+   *       <td>the policy's {@code heartbeat_duration}</td></tr>
+   *   <tr><td>{@code POST /machines/{id}/actions/check-out}</td>
+   *       <td>the policy's {@code heartbeat_duration}</td></tr>
+   *   <tr><td>{@code POST /machines/{id}/actions/generate-offline-proof}</td>
+   *       <td>the policy's {@code heartbeat_duration}</td></tr>
+   *   <tr><td>{@code POST /machines} (create/activate)</td><td>the 600-second fallback</td></tr>
+   *   <tr><td>{@code POST /machines/{id}/actions/ping-heartbeat}</td>
+   *       <td>the 600-second fallback</td></tr>
+   *   <tr><td>{@code POST /machines/{id}/actions/reset-heartbeat}</td>
+   *       <td>the 600-second fallback</td></tr>
+   *   <tr><td>{@code PATCH /machines/{id}}</td><td>the 600-second fallback</td></tr>
+   * </table>
+   *
+   * <p>Subtracting {@link #lastHeartbeatAt()} from this field recovers the effective window on the
+   * first group only, and nothing on the wire says which group a given response came from. Do not
+   * size a ping interval from it -- read the policy instead, through
+   * {@code TamgaClient.getLicensePolicy}.
    */
   public Instant nextHeartbeatAt() {
     return nextHeartbeatAt;

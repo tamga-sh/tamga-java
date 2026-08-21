@@ -18,6 +18,8 @@ import okhttp3.OkHttpClient;
 import sh.tamga.sdk.error.TamgaActivationValidationException;
 import sh.tamga.sdk.error.TamgaApiException;
 import sh.tamga.sdk.error.TamgaMachineOverLimitException;
+import sh.tamga.sdk.error.TamgaTransportException;
+import sh.tamga.sdk.model.ActivationOptions;
 import sh.tamga.sdk.model.ActivationResult;
 import sh.tamga.sdk.model.CheckOutOptions;
 import sh.tamga.sdk.model.Component;
@@ -25,13 +27,22 @@ import sh.tamga.sdk.model.CreateComponentOptions;
 import sh.tamga.sdk.model.CreateMachineOptions;
 import sh.tamga.sdk.model.CreateProcessOptions;
 import sh.tamga.sdk.model.Entitlement;
+import sh.tamga.sdk.model.HealthStatus;
+import sh.tamga.sdk.model.HeartbeatStatus;
 import sh.tamga.sdk.model.License;
 import sh.tamga.sdk.model.ListOptions;
 import sh.tamga.sdk.model.Machine;
+import sh.tamga.sdk.model.MachineListOptions;
 import sh.tamga.sdk.model.OfflineProofResult;
+import sh.tamga.sdk.model.OffsetPage;
 import sh.tamga.sdk.model.Page;
+import sh.tamga.sdk.model.Policy;
 import sh.tamga.sdk.model.Process;
+import sh.tamga.sdk.model.Release;
 import sh.tamga.sdk.model.Scope;
+import sh.tamga.sdk.model.UpdateMachineOptions;
+import sh.tamga.sdk.model.UpgradeCheckOptions;
+import sh.tamga.sdk.model.UpgradeCheckResult;
 import sh.tamga.sdk.model.ValidateOptions;
 import sh.tamga.sdk.model.ValidationCode;
 import sh.tamga.sdk.model.ValidationMeta;
@@ -188,6 +199,65 @@ public final class TamgaClient {
     return License.fromResourceNode(root.get("data"));
   }
 
+  /**
+   * Fetches a license by id.
+   *
+   * <p>Read-only: unlike {@link #quickValidate}, this touches nothing and returns no verdict. Use
+   * it to read the stored fields -- {@code expiry}, {@code status}, {@code machinesCount},
+   * {@code maxMachines} -- without asking the server to judge them.
+   *
+   * <p><b>Do not treat what comes back as scoped to the caller.</b> This route authorises on the
+   * {@code license.read} permission alone and never checks that a license-key credential is asking
+   * about its own license, so a key that can call this at all can read <em>every</em> license in
+   * the account, including each one's {@code key} attribute in plain text. That is a server-side
+   * gap, reported upstream; no client can close it. It is documented here so nobody builds a
+   * "read your own license" feature on this route and describes it as isolated -- it is not.
+   */
+  public License getLicense(String licenseId) {
+    JsonNode root = transport.getJson(Arrays.asList("licenses", licenseId), null);
+    return License.fromResourceNode(root.get("data"));
+  }
+
+  // ---------------------------------------------------------------- policies
+
+  /**
+   * Fetches the policy a license runs under.
+   *
+   * <p><b>This, not {@link #getPolicy}, is the policy read an embedded client can perform.</b> The
+   * route is authorised as a license read ({@code license.read}), which the license-key credential
+   * this SDK defaults to does hold. {@link #getPolicy} wants {@code policy.read}, which it does
+   * not.
+   *
+   * <p>The main reason to call it is {@link Policy#effectiveHeartbeatWindow()}: it is the only
+   * dependable way to learn the heartbeat window a machine will be measured against, and
+   * {@link HeartbeatScheduler.Builder#policy(Policy)} sizes the ping interval directly from it.
+   *
+   * <p>{@code max_memory} and {@code max_disk} are absent from every policy response the server
+   * serialises, so {@link Policy} does not model them -- those two limits are observable only
+   * after the fact, as {@link ValidationCode#TOO_MUCH_MEMORY} or
+   * {@link ValidationCode#TOO_MUCH_DISK} from a validation.
+   */
+  public Policy getLicensePolicy(String licenseId) {
+    JsonNode root = transport.getJson(Arrays.asList("licenses", licenseId, "policy"), null);
+    return Policy.fromResourceNode(root.get("data"));
+  }
+
+  /**
+   * Fetches a policy by id.
+   *
+   * <p><b>A license-key credential cannot call this.</b> The route requires the {@code policy.read}
+   * permission, which is not in a license token's set, so
+   * {@link AuthTransport#licenseKey(String)} answers {@code 403}
+   * ({@link TamgaApiException.ForbiddenException}) here however well-formed the request is. It is
+   * exposed for callers holding an admin, developer, product or environment token. Anything
+   * running under a license key wants {@link #getLicensePolicy} instead, which reaches the same
+   * resource through a route it is allowed to use.
+   */
+  public Policy getPolicy(String policyId) {
+    JsonNode root = transport.getJson(Arrays.asList("policies", policyId), null);
+    return Policy.fromResourceNode(root.get("data"));
+  }
+
   // ---------------------------------------------------------------- checkout
 
   /**
@@ -262,6 +332,136 @@ public final class TamgaClient {
   }
 
   /**
+   * Fetches a machine by id.
+   *
+   * <p><b>This is a read, and that is what makes it different from a ping.</b> The server resolves
+   * it through a query that joins {@code policies}, so two fields carry their true values here and
+   * only here among the routes an embedded client calls on a timer:
+   *
+   * <ul>
+   *   <li>{@link Machine#heartbeatStatus()} can genuinely report {@link HeartbeatStatus#DEAD}. A
+   *       ping cannot: it writes {@code last_heartbeat_at = NOW()} and then derives the status
+   *       from that same timestamp, so it always answers {@code ALIVE} or {@code RESURRECTED}.
+   *       This route measures against a timestamp nothing just reset.
+   *   <li>{@link Machine#nextHeartbeatAt()} is computed against the policy's real heartbeat window
+   *       rather than the 600-second fallback the bare-write routes report.
+   * </ul>
+   *
+   * <p>A {@code DEAD} reading still does not mean the row was culled -- the status is derived from
+   * the timestamp alone and never consults {@code require_heartbeat}, which defaults to false and
+   * is what the cull job requires. Keep pinging; the only row-is-gone signal is a {@code 404} from
+   * the ping itself.
+   *
+   * <p><b>Not scoped to the caller's own license.</b> No machine route applies a license-scope
+   * check, so a credential holding {@code machine.read} reads any machine in the account. The
+   * resource carries no license id either, so a machine read this way cannot be attributed to a
+   * license from its own fields.
+   */
+  public Machine getMachine(String machineId) {
+    JsonNode root = transport.getJson(Arrays.asList("machines", machineId), null);
+    return Machine.fromResourceNode(root.get("data"));
+  }
+
+  /**
+   * Lists the account's machines, one <b>offset</b>-paginated page at a time.
+   *
+   * <p>The one listing in this SDK that pages this way. It takes {@code page[number]} and
+   * {@code page[size]} and answers with a {@code meta.page} block, so
+   * {@link OffsetPage#hasNextPage()} is the server's own answer rather than the "was the page
+   * full?" guess the keyset listings force. {@link #listComponents} and
+   * {@link #listMachineProcesses} are keyset and return {@link Page}; do not interchange them.
+   *
+   * <p><b>The filters do not include a fingerprint.</b> {@code filter[q]} is a substring match
+   * across name, hostname and fingerprint, which narrows a search but never identifies one machine
+   * -- use {@link #findMachineByFingerprint} when an exact match is what is wanted.
+   */
+  public OffsetPage<Machine> listMachines(MachineListOptions options) {
+    MachineListOptions opts = options == null ? MachineListOptions.defaults() : options;
+    int size = opts.pageSize() > 0 ? opts.pageSize() : DEFAULT_PAGE_SIZE;
+    JsonNode root =
+        transport.getJson(Collections.singletonList("machines"), opts.toQuery(size));
+    List<Machine> items = new ArrayList<>();
+    for (JsonNode node : root.path("data")) {
+      items.add(Machine.fromResourceNode(node));
+    }
+    return OffsetPage.fromMetaNode(items, root.get("meta"));
+  }
+
+  /**
+   * Finds the machine registered under an exact fingerprint, or {@code null} if there is none.
+   *
+   * <p>Composed rather than an endpoint, because the server has no fingerprint filter. It sends
+   * the fingerprint as {@code filter[q]} -- a case-insensitive substring match over name, hostname
+   * and fingerprint -- narrowed by {@code filter[license]} when a license id is supplied, and then
+   * <b>compares {@link Machine#fingerprint()} exactly</b> on the rows that come back. That second
+   * step is not optional: {@code filter[q]} would also match a machine whose <em>hostname</em>
+   * merely contains the fingerprint, and a substring hit is not the same machine.
+   *
+   * <p>Reads one page at the server's maximum size. A fingerprint is unique within its policy's
+   * uniqueness scope, so a matching row is on the first page unless more than 100 other machines
+   * happen to contain the same substring -- in which case this reports {@code null} rather than
+   * paging on, and a caller who needs certainty there should walk {@link #listMachines} itself.
+   *
+   * @param fingerprint the exact fingerprint to look for; {@code null} or empty returns
+   *     {@code null} without a request
+   * @param licenseId narrows the search to one license, or {@code null} to search the account
+   * @return the matching machine, or {@code null} when no row carries that exact fingerprint
+   */
+  public Machine findMachineByFingerprint(String fingerprint, String licenseId) {
+    if (fingerprint == null || fingerprint.isEmpty()) {
+      return null;
+    }
+    MachineListOptions options = MachineListOptions.defaults()
+        .search(fingerprint)
+        .size(DEFAULT_PAGE_SIZE);
+    if (licenseId != null && !licenseId.isEmpty()) {
+      options = options.licenseId(licenseId);
+    }
+    for (Machine machine : listMachines(options).items()) {
+      if (machine != null && fingerprint.equals(machine.fingerprint())) {
+        return machine;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Updates a machine's mutable attributes.
+   *
+   * <p><b>Absent means "leave alone", so this cannot clear a field.</b> The server merges with
+   * {@code COALESCE}, so a field the request omits keeps its stored value -- and so does a field
+   * sent explicitly as {@code null}. {@link UpdateMachineOptions} omits anything the caller did not
+   * set, which makes the partial update work but leaves no way to null a column back out through
+   * this route.
+   *
+   * <p>{@code fingerprint} is not updatable, deliberately: it is the machine's identity and the
+   * thing uniqueness is enforced on. Neither are the license, policy, owner or group relationships.
+   *
+   * <p>{@code memory} and {@code disk} are <b>megabytes</b>, exactly as on
+   * {@link CreateMachineOptions}.
+   *
+   * <p><b>This is a write whose response can still report {@link HeartbeatStatus#DEAD}</b>, which
+   * makes it the exception to the otherwise reliable rule that a write never can. The rule holds
+   * because a write normally sets {@code last_heartbeat_at} and then derives the status from the
+   * timestamp it just wrote; this update touches neither, so the status is measured against a
+   * clock nothing reset. Its {@code UPDATE ... RETURNING} also does not join {@code policies}, so
+   * the {@link Machine#nextHeartbeatAt()} that comes back is computed against the 600-second
+   * fallback rather than the policy window -- treat a machine from this route as unusable for
+   * sizing a heartbeat interval.
+   *
+   * <p><b>Not scoped to the caller's own license.</b> The server authorises this on the
+   * {@code machine.update} permission alone and applies no license-scope check to any machine
+   * route, so a credential that can call this can update any machine in the account. That is a
+   * server-side gap, reported upstream; do not build on the assumption that it is confined.
+   */
+  public Machine updateMachine(String machineId, UpdateMachineOptions options) {
+    UpdateMachineOptions opts = options == null ? UpdateMachineOptions.none() : options;
+    JsonNode root =
+        transport.patchJson(Arrays.asList("machines", machineId), opts.toRequestBody());
+    return Machine.fromResourceNode(root.get("data"));
+  }
+
+  /**
    * Registers a machine and validates the license in one step, reporting an over-limit license as
    * one outcome however the server chose to report it.
    *
@@ -294,23 +494,64 @@ public final class TamgaClient {
    *     still exists and is carried on the exception.
    */
   public ActivationResult activateMachine(CreateMachineOptions options, Scope scope) {
+    return activateMachine(options, scope, ActivationOptions.defaults());
+  }
+
+  /**
+   * Registers a machine and validates the license, with control over what happens when the
+   * fingerprint is already taken.
+   *
+   * <p>Identical to {@link #activateMachine(CreateMachineOptions, Scope)} when passed
+   * {@link ActivationOptions#defaults()}. With
+   * {@link ActivationOptions#reuseTakenFingerprint(boolean) reuseTakenFingerprint(true)} a
+   * {@code 409 FINGERPRINT_TAKEN} stops being a dead end: the machine already registered under
+   * that fingerprint on this license is fetched and validated in place of a newly created one,
+   * which makes re-activation idempotent.
+   *
+   * <p>That conflict is not an edge case. A fingerprint is stable by design, so an application
+   * that activates on every launch gets a 409 on every launch after the first -- the server treats
+   * re-registration as a conflict deliberately, and without this the caller is left holding an
+   * error where it wanted a machine id.
+   *
+   * <p><b>A reused machine is never rolled back.</b> If validation reports an over-limit verdict
+   * the pre-existing row stays: it predates this call and its seat is not this activation's to
+   * release. {@link TamgaMachineOverLimitException#rolledBack()} is {@code false} in that case, and
+   * unlike the create-time refusal a machine row does still exist -- see that method.
+   *
+   * @param options the machine to register
+   * @param scope the validation scope, or {@code null} for none
+   * @param activationOptions how to handle an already-registered fingerprint; {@code null} means
+   *     {@link ActivationOptions#defaults()}
+   * @throws TamgaMachineOverLimitException if the license is over a policy limit
+   * @throws TamgaActivationValidationException if the validation call itself failed
+   */
+  public ActivationResult activateMachine(CreateMachineOptions options, Scope scope,
+      ActivationOptions activationOptions) {
+    ActivationOptions activationOpts =
+        activationOptions == null ? ActivationOptions.defaults() : activationOptions;
     Machine machine;
+    boolean reused = false;
     try {
       machine = createMachine(options);
     } catch (TamgaApiException e) {
       // A create-time limit rejection is the same product event as an over-limit validate verdict,
       // so it is translated rather than passed through -- otherwise the caller has to handle two
       // sets of names for one condition, and which one they see depends on a policy setting they
-      // do not control. Anything else (FINGERPRINT_TAKEN, auth, transport) is not a limit and is
-      // rethrown untouched.
+      // do not control. Anything else (auth, transport) is not a limit and is rethrown untouched.
       ValidationCode limit = ValidationCode.fromMachineLimitErrorCode(e.code());
       if (limit == null) {
-        throw e;
+        Machine existing = recoverTakenFingerprint(options, activationOpts, e);
+        if (existing == null) {
+          throw e;
+        }
+        machine = existing;
+        reused = true;
+      } else {
+        throw new TamgaMachineOverLimitException(
+            ValidationMeta.of(Instant.now(), false, e.error() == null ? null : e.error().detail(),
+                limit),
+            false, e);
       }
-      throw new TamgaMachineOverLimitException(
-          ValidationMeta.of(Instant.now(), false, e.error() == null ? null : e.error().detail(),
-              limit),
-          false, e);
     }
     ValidationResult validation;
     try {
@@ -324,10 +565,34 @@ public final class TamgaClient {
 
     ValidationMeta meta = validation.meta();
     if (meta != null && meta.code() != null && meta.code().overLimit()) {
+      if (reused) {
+        // Not ours to delete. The row was there before this call, and destroying a machine the
+        // customer already licensed because some *other* machine pushed the license over its
+        // limit would free a seat at the wrong machine's expense.
+        throw new TamgaMachineOverLimitException(meta, false, null);
+      }
       deleteQuietly(machine);
       throw new TamgaMachineOverLimitException(meta);
     }
     return new ActivationResult(machine, meta);
+  }
+
+  /**
+   * Resolves a {@code 409 FINGERPRINT_TAKEN} to the machine that already holds the fingerprint, or
+   * {@code null} when that is not what happened or the row cannot be found on this license.
+   *
+   * <p>Deliberately narrow. It fires only on that one error code, only when the caller opted in,
+   * and only for a machine the {@code filter[license]} narrowing proves belongs to the license
+   * being activated against -- a machine resource carries no license id of its own, so a row found
+   * any other way could not be shown to be the right one.
+   */
+  private Machine recoverTakenFingerprint(CreateMachineOptions options, ActivationOptions opts,
+      TamgaApiException failure) {
+    if (!opts.reusesTakenFingerprint()
+        || !(failure instanceof TamgaApiException.FingerprintTakenException)) {
+      return null;
+    }
+    return findMachineByFingerprint(options.fingerprint(), options.licenseId());
   }
 
   /**
@@ -422,6 +687,28 @@ public final class TamgaClient {
     return new Page<>(synthesizeCursor(items.size(), opts, lastId(root)), items);
   }
 
+  /**
+   * Lists a machine's processes, one keyset-paginated page at a time.
+   *
+   * <p>Keyset, like {@link #listComponents} and unlike {@link #listMachines}: this route takes
+   * {@code limit} and {@code page[after]}, sends no {@code meta.page}, and the next cursor is
+   * synthesized from the last row's id when a full page came back.
+   *
+   * <p>Pair it with {@link #deleteProcess} to find the rows nothing is reaping: a machine whose
+   * process list keeps growing across runs is one whose application never disposed of its
+   * registrations.
+   */
+  public Page<Process> listMachineProcesses(String machineId, ListOptions options) {
+    ListOptions opts = options == null ? ListOptions.defaults() : options;
+    JsonNode root = transport.getJson(Arrays.asList("machines", machineId, "processes"),
+        pageQuery(opts));
+    List<Process> items = new ArrayList<>();
+    for (JsonNode node : root.path("data")) {
+      items.add(Process.fromResourceNode(node));
+    }
+    return new Page<>(synthesizeCursor(items.size(), opts, lastId(root)), items);
+  }
+
   /** Registers a running process against a machine. */
   public Process createProcess(CreateProcessOptions options) {
     JsonNode root = transport.postJson(Collections.singletonList("processes"),
@@ -439,6 +726,27 @@ public final class TamgaClient {
     JsonNode root =
         transport.postJson(Arrays.asList("processes", processId, "actions", "ping"), null);
     return Process.fromResourceNode(root.get("data"));
+  }
+
+  /**
+   * Deletes a process registration.
+   *
+   * <p><b>Call this.</b> The server's own reaper for expired process rows is not wired up, so
+   * nothing removes them on its own: a row created by {@link #createProcess} outlives the process
+   * it describes and goes on counting against the license's {@code TOO_MANY_PROCESSES} limit until
+   * something deletes it. An application that registers a process per run and never deletes one
+   * accumulates rows until activation starts failing on a limit no running process is actually
+   * using.
+   *
+   * <p>{@link ProcessHeartbeatScheduler#dispose()} pairs the two: it stops pinging and deletes the
+   * row in one call, which is the shape most callers want at shutdown.
+   *
+   * <p>Answers {@code 204} with no content. A row that is already gone answers
+   * {@code 404 NOT_FOUND} ({@link TamgaApiException.NotFoundException}), which for a deletion is
+   * usually the outcome the caller wanted anyway.
+   */
+  public void deleteProcess(String processId) {
+    transport.deleteNoContent(Arrays.asList("processes", processId));
   }
 
   // ------------------------------------------------------------ entitlements
@@ -519,6 +827,69 @@ public final class TamgaClient {
   /** Drops the cached entitlement set for a license, forcing the next lookup to refetch. */
   public void invalidateEntitlementCache(String licenseId) {
     entitlementCache.invalidate(licenseId);
+  }
+
+  // ------------------------------------------------- releases and diagnostics
+
+  /**
+   * Asks whether a newer release is available for an installed version.
+   *
+   * <p><b>Read {@link UpgradeCheckResult} before rendering the answer.</b> The negative case means
+   * "nothing is available to you", not "you are up to date": the server answers {@code 204} both
+   * when no newer release exists and when one exists that this license is not entitled to, and it
+   * does that deliberately so a refusal cannot leak the existence of a build the caller cannot
+   * have. There is no client-side way to tell the two apart.
+   *
+   * <p>This route is {@code OptionalAuth}: a product whose distribution strategy is open answers
+   * an unauthenticated caller, so an auto-updater keeps working for an installation with no
+   * credential. This SDK sends its credential regardless, per its rule that credentials go on
+   * every request.
+   *
+   * <p>Two outcomes arrive as exceptions rather than as a result: a <b>suspended</b> license is
+   * refused with {@code 403} ({@link TamgaApiException.ForbiddenException}) rather than being
+   * folded into the {@code 204}, and an unknown product id answers {@code 404}. A malformed query
+   * is rejected by a bare extractor that answers <b>plain-text</b> {@code 400}, not a JSON:API
+   * error document, so it surfaces with the synthetic {@code UNKNOWN} code the error path uses for
+   * any non-JSON:API body.
+   *
+   * <p>No download URL comes back. The artifact-download route exists, but no credential this SDK
+   * issues is permitted to use it, so obtaining the build itself is the application's problem.
+   *
+   * @param options the product, platform, file type, installed version and channel to check
+   * @return the offered release, or {@link UpgradeCheckResult#none()}
+   */
+  public UpgradeCheckResult checkForUpgrade(UpgradeCheckOptions options) {
+    JsonNode root = transport.getJsonOrNoContent(
+        Arrays.asList("releases", "actions", "upgrade"), options.toQuery());
+    if (root == null) {
+      return UpgradeCheckResult.none();
+    }
+    Release release = Release.fromResourceNode(root.get("data"));
+    if (release == null) {
+      // A 200 that carried no resource is not the same event as a 204, and collapsing them would
+      // report "no update" for what is actually a malformed response.
+      throw new TamgaTransportException(
+          "The upgrade check answered 200 with no release resource.");
+    }
+    return UpgradeCheckResult.of(release);
+  }
+
+  /**
+   * Reads the server's liveness report.
+   *
+   * <p>The one route this client calls that is <b>not</b> under
+   * {@code /v1/accounts/{accountId}}, and the only one whose response is not a JSON:API document
+   * -- see {@link HealthStatus}. It is public server-side and exempt from host-header
+   * verification.
+   *
+   * <p><b>That exemption is what makes it a diagnostic.</b> If every other call is failing with
+   * {@code 403} and "The Host header does not match any configured host" while this one succeeds,
+   * the fault is the server's allowed-hosts configuration rather than the caller's credential. The
+   * converse does not hold: this route succeeds for a caller whose credential is wrong, invalid or
+   * absent, so a healthy answer says nothing about authentication.
+   */
+  public HealthStatus health() {
+    return HealthStatus.fromJson(transport.getRootJson(Arrays.asList("v1", "health"), null));
   }
 
   // ----------------------------------------------------------------- helpers
