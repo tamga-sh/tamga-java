@@ -149,11 +149,23 @@ public final class CheckoutFixture {
    * a {@code ttl}.
    */
   public static byte[] licensePayloadJson(String key, Long exp) {
+    return licensePayloadJson(key, exp, "test-kid");
+  }
+
+  /**
+   * As {@link #licensePayloadJson(String, Long)}, naming the signing key the file claims.
+   *
+   * <p>The {@code kid} claim is what key-set verification reads once every trusted key has failed
+   * the signature check, so a rotation test needs to control it. Pass {@code null} to omit the
+   * claim entirely, which is what a file that will not say who signed it looks like.
+   */
+  public static byte[] licensePayloadJson(String key, Long exp, String kid) {
     String expField = exp == null ? "" : ",\"exp\":" + exp;
+    String kidField = kid == null ? "" : ",\"kid\":\"" + kid + "\"";
     String json = "{\"data\":{\"id\":\"lic_123\",\"type\":\"licenses\",\"attributes\":{"
         + "\"key\":\"" + key + "\",\"suspended\":false,\"uses\":0}},"
-        + "\"meta\":{\"iat\":1767225600,\"jti\":\"test-jti\","
-        + "\"kid\":\"test-kid\"" + expField + "}}";
+        + "\"meta\":{\"iat\":1767225600,\"jti\":\"test-jti\""
+        + kidField + expField + "}}";
     return json.getBytes(StandardCharsets.UTF_8);
   }
 
@@ -185,9 +197,14 @@ public final class CheckoutFixture {
    * legitimately never expires.
    */
   public static byte[] machinePayloadJson(String fingerprint, Long exp) {
+    return machinePayloadJson(fingerprint, exp, "test-kid");
+  }
+
+  /** As {@link #machinePayloadJson(String, Long)}, naming the signing key the file claims. */
+  public static byte[] machinePayloadJson(String fingerprint, Long exp, String kid) {
     String json = "{\"data\":{\"id\":\"mach_123\",\"type\":\"machines\",\"attributes\":{"
         + "\"fingerprint\":\"" + fingerprint + "\",\"heartbeat_status\":\"NOT_STARTED\"}},"
-        + machineMeta(exp) + "}";
+        + machineMeta(exp, kid) + "}";
     return json.getBytes(StandardCharsets.UTF_8);
   }
 
@@ -202,14 +219,15 @@ public final class CheckoutFixture {
         + "\"last_heartbeat_at\":\"2026-08-01T12:00:00.500Z\","
         + "\"last_check_out_at\":\"2026-07-15T09:30:00Z\","
         + "\"metadata\":{\"region\":\"eu-west-1\",\"cores\":8,\"gpu\":false}}},"
-        + machineMeta(null) + "}";
+        + machineMeta(null, "test-kid") + "}";
     return json.getBytes(StandardCharsets.UTF_8);
   }
 
-  private static String machineMeta(Long exp) {
+  private static String machineMeta(Long exp, String kid) {
     String expField = exp == null ? "" : ",\"exp\":" + exp;
-    return "\"meta\":{\"iat\":1767225600,\"jti\":\"test-jti\",\"kid\":\"test-kid\""
-        + expField + "}";
+    String kidField = kid == null ? "" : ",\"kid\":\"" + kid + "\"";
+    return "\"meta\":{\"iat\":1767225600,\"jti\":\"test-jti\""
+        + kidField + expField + "}";
   }
 
   private static byte[] randomBytes(int length) {

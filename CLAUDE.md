@@ -437,6 +437,32 @@ source doc for the full set, including analytics/EE items that don't touch this 
   Upstream note: the server test `rsa_public_key_is_spki_der` asserts only `len > 256`, which both
   270-byte PKCS#1 and 294-byte SPKI satisfy — so it passes while asserting the opposite of what its
   name claims, and cannot catch this discrepancy.
+- **A file's `kid` names the account's Ed25519 key WHATEVER scheme signed it, and that governs the
+  whole key-set design.** `key_id` is `lowercase_hex(SHA-256(the public key's base64 STRING)[0..8])`
+  — 16 characters, over the stored string and never the 32 decoded bytes, the same trap as the
+  signature covering `enc`'s base64 string (`Ed25519.keyId`, pinned by `Ed25519KeyIdTest` against
+  vectors this repo did not generate, including a negative case for the decode-first answer).
+  `GET /v1/accounts/{id}/signing-keys` serves that id as the resource **`id`**, so
+  `SigningKeySet.of` indexes by what the server sent and computes the id only as a cross-check
+  (`mismatchedKeyIds()`); lookup accepts either spelling so a mislabelled key still verifies its
+  own files. Three consequences that are easy to get wrong:
+  (1) `check_out_machine.rs:86-99` picks the *signing* key by scheme but `:127` derives the `kid`
+  from `account.ed25519_public_key` **unconditionally**, so an RSA/ECDSA machine file names a key
+  that cannot verify it — `MachineFile`'s key-set path therefore refuses any suffix but `ed25519`
+  rather than doing a scheme-agnostic lookup. ⚠️ The 12 machine-file fixtures **disagree with the
+  server here**: their generator derived each `kid` from that file's own signing key, so they carry
+  four distinct kids where production emits one. Measured, not assumed. Use them to pin the hash
+  rule and nothing else.
+  (2) An account whose public-key column was never populated stamps `key_id("")` =
+  `e3b0c44298fc1c14` on every file it signs while signing with a real private key — its own
+  condition (`SigningKeyNotPublishedException`), because refetching keys cannot fix it.
+  (3) Verification tries **every** key against the signature before reading the `kid`, never the
+  reverse: the claim lives inside the signed payload, and this both preserves the "authenticate
+  before parsing" rule and lets an `e3b0c44298fc1c14` file verify normally when the real key is
+  held. An unknown `kid` is `UnknownSigningKeyException`, never
+  `SignatureVerificationException` — collapsing the two is the M22 defect itself.
+  The route needs `account.read`, which `LicenseToken` lacks, so an embedded client must pin keys
+  via `SigningKeySet.ofPublicKeys`; `listSigningKeys()` is for admin-token callers.
 - **`RSA_2048_JWT_RS256` is rejected for machine files.** `MachineFile.verify` throws
   `TamgaCheckoutException.SchemeNotSupportedException` before attempting any verification — and
   before `alg` is even parsed — matching the server's `422 SCHEME_NOT_SUPPORTED`. No JWT

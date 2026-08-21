@@ -190,7 +190,17 @@ public final class MachineFixtures {
 
     /** The account's public key, in whichever encoding the server distributes for the scheme. */
     public byte[] publicKey() {
-      return Base64.getDecoder().decode(entry.get("public_key_b64").asText());
+      return Base64.getDecoder().decode(publicKeyBase64());
+    }
+
+    /**
+     * The account's public key as the published base64 STRING -- what a key id is a hash of.
+     *
+     * <p>Kept separate from {@link #publicKey()} deliberately: the id hashes this string, never
+     * the bytes it decodes to.
+     */
+    public String publicKeyBase64() {
+      return entry.get("public_key_b64").asText();
     }
 
     /** Whether {@code enc} is AES-256-GCM ciphertext rather than plain base64 JSON. */
@@ -219,7 +229,23 @@ public final class MachineFixtures {
       return entry.get("fingerprint").asText();
     }
 
-    /** The {@code kid} claim the signed payload should carry. */
+    /**
+     * The {@code kid} claim the signed payload carries.
+     *
+     * <p><b>On a non-Ed25519 fixture this value disagrees with the real server, and must not be
+     * used to claim anything about which key signed the file.</b> {@code check_out_machine.rs}
+     * selects the SIGNING key by scheme (lines 86-99) but derives the {@code kid} from {@code
+     * account.ed25519_public_key} UNCONDITIONALLY (line 127) -- so production emits one kid, the
+     * account's Ed25519 one, for all four schemes. This corpus's generator instead derived each
+     * kid from that file's own signing key, which is why the manifest carries four distinct kids.
+     * Measured, not assumed: all 12 entries satisfy {@code kid == keyId(public_key_b64)}, which
+     * the server's own code cannot produce for the RSA and ECDSA rows.
+     *
+     * <p>What these values legitimately pin is the HASH RULE itself -- see {@code
+     * Ed25519KeyIdTest} -- and nothing else. In particular they are not evidence for any
+     * kid-to-key lookup on a non-Ed25519 machine file, which is exactly why
+     * {@code MachineFile}'s key-set path refuses those files outright.
+     */
     public String kid() {
       return entry.get("kid").asText();
     }

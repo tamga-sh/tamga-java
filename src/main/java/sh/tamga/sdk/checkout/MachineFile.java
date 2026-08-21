@@ -1,5 +1,6 @@
 package sh.tamga.sdk.checkout;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import sh.tamga.sdk.crypto.Ecdsa;
@@ -179,6 +180,16 @@ public final class MachineFile {
   }
 
   /**
+   * As {@link #verifyWithClaims(SigningKeySet, String, String, long)}, reading the current time
+   * from {@link System#currentTimeMillis()}.
+   */
+  public VerifiedMachineFile verifyAndDecrypt(SigningKeySet signingKeys, String licenseKey,
+      String fingerprint) {
+    return verifyWithClaims(signingKeys, licenseKey, fingerprint,
+        System.currentTimeMillis() / 1000L);
+  }
+
+  /**
    * As {@link #verifyAndDecrypt}, also returning the signed claims and taking the current time
    * from the caller.
    *
@@ -203,7 +214,59 @@ public final class MachineFile {
 
     // Already validated by verify() above; re-parsed here only to read the encoding prefix.
     MachineFileAlg alg = MachineFileAlg.parse(certificate.alg, scheme);
+    return decodeVerified(alg, licenseKey, fingerprint, nowUnixSeconds);
+  }
 
+  /**
+   * Verifies against a set of trusted signing keys rather than one public key, so a file signed
+   * before the account rotated its key still verifies -- and one signed by a key the set does not
+   * hold reports {@link TamgaCheckoutException.UnknownSigningKeyException} instead of the error a
+   * forgery produces. See {@link LicenseFile#verifyWithClaims(SigningKeySet, String, long)} for
+   * the full rationale and for how to build a set.
+   *
+   * <p><b>Ed25519-signed machine files only, and there is no {@code scheme} parameter for that
+   * reason.</b> A key set cannot serve the other three schemes: the only keys an account publishes
+   * are Ed25519, and both checkout handlers compute the {@code kid} claim from {@code
+   * account.ed25519_public_key} whatever scheme actually signed the bytes -- so on an RSA- or
+   * ECDSA-signed file the claim names a key that did not sign it. Such a file is refused here with
+   * {@link TamgaCheckoutException.UnsupportedAlgorithmException}; verify it with {@link
+   * #verifyWithClaims(LicenseScheme, byte[], String, String, long)} and the license's own scheme,
+   * and accept that a rotation is not a distinguishable outcome for it.
+   *
+   * <p>The absence of a scheme parameter is not the algorithm-confusion hole the type-level
+   * remarks warn about. Dispatch is not being keyed on the file's self-declared {@code alg}: the
+   * verifier is fixed at Ed25519 by this method's own contract, and {@code alg} is still parsed
+   * only to reject anything that does not claim {@code ed25519} and to read the encoding prefix.
+   * A file claiming {@code ed25519} while signed with something else fails every signature check
+   * in the set.
+   *
+   * <p>Ordering is unchanged: every key in the set is checked against the signature over {@code
+   * enc}'s string bytes BEFORE anything inside {@code enc} is decoded, split or decrypted, and the
+   * {@code kid} claim is read only after they have all failed, purely to choose which error to
+   * report.
+   */
+  public VerifiedMachineFile verifyWithClaims(SigningKeySet signingKeys, String licenseKey,
+      String fingerprint, long nowUnixSeconds) {
+    MachineFileAlg alg = MachineFileAlg.parseEd25519(certificate.alg);
+
+    byte[] signature = Base64Codec.decodeOrNull(certificate.sig);
+    byte[] message = certificate.enc.getBytes(StandardCharsets.UTF_8);
+
+    SigningKeySet.Entry entry = SigningKeySelection.resolve(signingKeys,
+        publicKey -> signature != null && Ed25519.verify(publicKey, message, signature),
+        () -> unverifiedKeyId(alg, licenseKey, fingerprint));
+
+    Machine.MachineWithClaims result =
+        decodeVerified(alg, licenseKey, fingerprint, nowUnixSeconds);
+    return new VerifiedMachineFile(result.machine(), result.claims(), entry.key());
+  }
+
+  /**
+   * Decodes, decrypts and expiry-checks the payload of a file whose signature has ALREADY
+   * verified. Never call this on unverified bytes.
+   */
+  private Machine.MachineWithClaims decodeVerified(MachineFileAlg alg, String licenseKey,
+      String fingerprint, long nowUnixSeconds) {
     byte[] jsonBytes;
     if (alg.isEncrypted()) {
       byte[] key = Hkdf.deriveMachineFileKey(licenseKey, fingerprint);
@@ -231,5 +294,29 @@ public final class MachineFile {
     }
 
     return result;
+  }
+
+  /**
+   * Reads the {@code kid} claim out of bytes NOTHING has vouched for, or {@code null} if it cannot
+   * be read -- see {@code LicenseFile}'s counterpart for why this is safe and why every failure
+   * collapses to {@code null}.
+   */
+  private String unverifiedKeyId(MachineFileAlg alg, String licenseKey, String fingerprint) {
+    try {
+      byte[] jsonBytes;
+      if (alg.isEncrypted()) {
+        jsonBytes = EncryptedPayloadDecryptor.decryptDotSeparated(certificate.enc,
+            Hkdf.deriveMachineFileKey(licenseKey, fingerprint), "Encrypted machine file");
+      } else {
+        jsonBytes = Base64Codec.decodeOrNull(certificate.enc);
+        if (jsonBytes == null) {
+          return null;
+        }
+      }
+      JsonNode kid = TamgaJsonMapper.instance().readTree(jsonBytes).path("meta").get("kid");
+      return kid == null || kid.isNull() ? null : kid.asText();
+    } catch (IOException | RuntimeException e) {
+      return null;
+    }
   }
 }

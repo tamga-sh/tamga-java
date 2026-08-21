@@ -287,6 +287,64 @@ the same key from different endpoints.
 `MachineFile.validateTtl(int)` mirrors the server's `ttl` bounds (`> 0` and `<= 31536000`, i.e. 365
 days) so a checkout request can fail fast client-side.
 
+### Surviving a signing-key rotation
+
+When an account rotates its Ed25519 signing key, a file signed **before** the rotation is still
+authentic — but against the current key alone it fails with exactly the error a forged file
+produces. Verifying against a *key set* keeps the two apart.
+
+```java
+import sh.tamga.sdk.checkout.LicenseFile;
+import sh.tamga.sdk.checkout.SigningKeySet;
+import sh.tamga.sdk.checkout.VerifiedLicenseFile;
+import sh.tamga.sdk.error.TamgaCheckoutException;
+
+// Pin the account's published keys — no network needed, and the path an embedded client has.
+SigningKeySet keys = SigningKeySet.ofPublicKeys(currentKeyBase64, previousKeyBase64);
+
+try {
+  VerifiedLicenseFile verified =
+      LicenseFile.parse(pem).verifyWithClaims(keys, licenseKey, serverUnixSeconds);
+
+  verified.license();
+  verified.claims();
+  verified.key().isRetired();  // authentic, but issued before the last rotation
+} catch (TamgaCheckoutException.UnknownSigningKeyException e) {
+  // NOT a forgery: the file names a key this set does not hold. Refresh the key set.
+  e.keyId();
+  e.availableKeyIds();
+} catch (TamgaCheckoutException.SignatureVerificationException e) {
+  // The named key IS in the set and the signature still fails. Refuse the file.
+}
+```
+
+`MachineFile` has the same pair of entry points, minus the scheme argument —
+`verifyAndDecrypt(keys, licenseKey, fingerprint)` and
+`verifyWithClaims(keys, licenseKey, fingerprint, nowUnixSeconds)`.
+
+Three conditions are distinguishable, all subclasses of `TamgaCheckoutException`:
+
+| Condition | Meaning | What to do |
+|---|---|---|
+| `UnknownSigningKeyException` | The file names a key the set does not hold. | Refresh the key set or ship an update — the file may well be genuine. |
+| `SigningKeyNotPublishedException` | The file's `kid` is `keyId("")`, so the issuing account never published a public key. A subclass of the above. | Refetching cannot help; the account's key column has to be populated server-side. |
+| `NoUsableSigningKeyException` | The set holds no usable Ed25519 key at all. | Check what was pinned or fetched. An empty *published* set is normal for an account that has never rotated. |
+
+Three things are worth knowing before building on this:
+
+- **The keys do not have to come over the wire, and usually cannot.**
+  `TamgaClient.listSigningKeys()` / `signingKeySet()` read
+  `GET /v1/accounts/{accountId}/signing-keys`, which requires the `account.read` permission — a
+  license-key credential does not hold it and gets `403`. Pin the public keys instead. An offline
+  verifier that only works while it has a network is not offline.
+- **Key sets are Ed25519-only.** Only Ed25519 keys are ever published or rotated, so
+  `MachineFile`'s key-set entry points refuse an RSA- or ECDSA-signed file rather than guessing.
+  Verify those with the license's own scheme and a single public key.
+- **Signatures are checked before the `kid` claim is read.** Every key in the set is tried against
+  the signature first; the claim — which lives inside the signed payload — is only read once they
+  have all failed, and only to choose which error to report. It selects from keys you already
+  trust and can never introduce one.
+
 ### Offline proofs
 
 A lighter-weight "this machine is still valid" check for air-gapped environments. Proofs are always

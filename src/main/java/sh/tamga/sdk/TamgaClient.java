@@ -15,6 +15,7 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
+import sh.tamga.sdk.checkout.SigningKeySet;
 import sh.tamga.sdk.error.TamgaActivationValidationException;
 import sh.tamga.sdk.error.TamgaApiException;
 import sh.tamga.sdk.error.TamgaMachineOverLimitException;
@@ -40,6 +41,7 @@ import sh.tamga.sdk.model.Policy;
 import sh.tamga.sdk.model.Process;
 import sh.tamga.sdk.model.Release;
 import sh.tamga.sdk.model.Scope;
+import sh.tamga.sdk.model.SigningKey;
 import sh.tamga.sdk.model.UpdateMachineOptions;
 import sh.tamga.sdk.model.UpgradeCheckOptions;
 import sh.tamga.sdk.model.UpgradeCheckResult;
@@ -299,6 +301,67 @@ public final class TamgaClient {
       query.put("ttl", Integer.toString(opts.ttl()));
     }
     return transport.getText(segments, query);
+  }
+
+  // ----------------------------------------------------------- signing keys
+
+  /**
+   * Lists the account's published Ed25519 signing keys, current and retired.
+   *
+   * <p>This is what makes a key rotation survivable offline. An offline {@code .lic} or {@code
+   * .machine} file names the key that signed it in its {@code kid} claim, and a client holding a
+   * file issued before the last rotation needs that key -- see {@link SigningKeySet}. Retired keys
+   * are included by design; that is the point of the route.
+   *
+   * <p><b>A license-key credential cannot call this.</b> The route requires the {@code
+   * account.read} permission, which is not in the {@code LicenseToken} permission set, so
+   * {@link AuthTransport#licenseKey(String)} answers {@code 403}
+   * ({@link TamgaApiException.ForbiddenException}) here however well-formed the request is. Unlike
+   * {@link #getPolicy} and {@link #getLicensePolicy} there is no second route reaching the same
+   * resource under a permission a license key does hold.
+   *
+   * <p>That is not fatal to offline verification, and building a product around this call would be
+   * the mistake: a key set does not have to arrive over the wire. Pin the account's published keys
+   * into the application with {@link SigningKeySet#ofPublicKeys}, or fetch them from a build step
+   * or a server of your own holding an admin token. <b>An offline verifier that only works while
+   * it has a network is not offline.</b>
+   *
+   * <p><b>An empty list is normal, not an error.</b> {@code account_signing_keys} is written only
+   * by the rotation path, which backfills the account's current key on its way through, so an
+   * account that has never rotated has no rows at all and this answers {@code []}. Pin the current
+   * public key rather than treating that as a failure.
+   *
+   * <p>Only public halves come back: the server's own row type has no field for a private key, so
+   * one cannot leak through this route.
+   *
+   * @return the keys newest first, as the server orders them; never null.
+   */
+  public List<SigningKey> listSigningKeys() {
+    JsonNode root = transport.getJson(Collections.singletonList("signing-keys"), null);
+    List<SigningKey> items = new ArrayList<>();
+    for (JsonNode node : root.path("data")) {
+      SigningKey key = SigningKey.fromResourceNode(node);
+      if (key != null) {
+        items.add(key);
+      }
+    }
+    return Collections.unmodifiableList(items);
+  }
+
+  /**
+   * Fetches the account's signing keys and indexes them for offline verification -- {@link
+   * SigningKeySet#of}{@code (}{@link #listSigningKeys()}{@code )}.
+   *
+   * <p>One call, cacheable for the life of the process: pass the result to
+   * {@link sh.tamga.sdk.checkout.LicenseFile#verifyWithClaims(SigningKeySet, String, long)} or its
+   * machine-file counterpart. Every caveat on {@link #listSigningKeys()} applies, in particular
+   * that a license-key credential is refused with {@code 403}.
+   *
+   * <p>Unusable rows -- a future non-Ed25519 algorithm, a key that does not decode -- are skipped
+   * rather than failing the whole set; {@link SigningKeySet#skippedKeyIds()} names them.
+   */
+  public SigningKeySet signingKeySet() {
+    return SigningKeySet.of(listSigningKeys());
   }
 
   // ---------------------------------------------------------------- machines

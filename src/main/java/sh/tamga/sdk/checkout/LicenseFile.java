@@ -1,5 +1,6 @@
 package sh.tamga.sdk.checkout;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import sh.tamga.sdk.crypto.Ed25519;
@@ -106,14 +107,7 @@ public final class LicenseFile {
    *     two documented ed25519 literals.
    */
   public boolean verify(byte[] publicKey) {
-    // Exact match against the two documented literal values -- LicenseFile's alg is always
-    // ed25519 and always one of exactly these two literals, unlike MachineFile's compound
-    // encryption-prefix/signature-suffix alg space across 5 schemes.
-    if (!ALG_PLAIN.equals(certificate.alg) && !ALG_ENCRYPTED.equals(certificate.alg)) {
-      throw new TamgaCheckoutException.UnsupportedAlgorithmException(
-          "Unsupported license file algorithm: '" + certificate.alg + "'. Only ed25519-signed "
-              + "license files are supported.");
-    }
+    requireSupportedAlg();
 
     byte[] signature = Base64Codec.decodeOrNull(certificate.sig);
     if (signature == null) {
@@ -140,6 +134,37 @@ public final class LicenseFile {
   }
 
   /**
+   * As {@link #verifyAndDecrypt(byte[], String)}, choosing the key from a set of trusted keys by
+   * the file's own {@code kid} claim -- so a file signed before the account rotated its signing
+   * key still verifies, and one signed by a key the set does not hold is reported as such rather
+   * than as a forgery.
+   *
+   * <p>This is what makes a key rotation survivable. Against a single key the two outcomes are one
+   * error; through a key set they are distinct:
+   *
+   * <ul>
+   *   <li>no key in the set verifies and the file names one the set does not hold -&gt; {@link
+   *       TamgaCheckoutException.UnknownSigningKeyException}: fetch the account's key set, or ship
+   *       an application update, and try again;
+   *   <li>the file names a key the set DOES hold and the signature still fails -&gt; {@link
+   *       TamgaCheckoutException.SignatureVerificationException}: refuse the file.
+   * </ul>
+   *
+   * <p>Build the set with {@code TamgaClient.signingKeySet()} (one call, cacheable for the life of
+   * the process) or, with no network at all, from public keys pinned in the binary via {@link
+   * SigningKeySet#ofPublicKeys}. The latter is what an embedded client has: the signing-keys route
+   * wants the {@code account.read} permission, which a license-key credential does not hold.
+   *
+   * <p>Ordering is unchanged from the single-key path: every key in the set is checked against the
+   * signature BEFORE anything inside {@code enc} is decoded, and the {@code kid} claim is read
+   * only once they have all failed, purely to choose which error to report. See {@link
+   * SigningKeySelection}.
+   */
+  public VerifiedLicenseFile verifyAndDecrypt(SigningKeySet signingKeys, String licenseKey) {
+    return verifyWithClaims(signingKeys, licenseKey, System.currentTimeMillis() / 1000L);
+  }
+
+  /**
    * As {@link #verifyAndDecrypt(byte[], String)}, also returning the signed claims and taking the
    * current time from the caller.
    *
@@ -154,7 +179,51 @@ public final class LicenseFile {
     if (!verify(publicKey)) {
       throw new TamgaCheckoutException.SignatureVerificationException();
     }
+    return decodeVerified(licenseKey, nowUnixSeconds);
+  }
 
+  /**
+   * As {@link #verifyAndDecrypt(SigningKeySet, String)}, taking the current time from the caller
+   * -- see {@link #verifyWithClaims(byte[], String, long)} for why that matters.
+   *
+   * <p>The verified key comes back on {@link VerifiedLicenseFile#key()}, so a caller can tell an
+   * active key from a retired one: a file that verifies only under a retired key is authentic and
+   * also a signal that whatever issued it is overdue for a fresh checkout.
+   */
+  public VerifiedLicenseFile verifyWithClaims(SigningKeySet signingKeys, String licenseKey,
+      long nowUnixSeconds) {
+    requireSupportedAlg();
+
+    byte[] signature = Base64Codec.decodeOrNull(certificate.sig);
+    // CRITICAL: the same base64 STRING bytes the single-key path signs over -- see verify().
+    byte[] message = certificate.enc.getBytes(StandardCharsets.UTF_8);
+
+    SigningKeySet.Entry entry = SigningKeySelection.resolve(signingKeys,
+        publicKey -> signature != null && Ed25519.verify(publicKey, message, signature),
+        () -> unverifiedKeyId(licenseKey));
+
+    License.LicenseWithClaims result = decodeVerified(licenseKey, nowUnixSeconds);
+    return new VerifiedLicenseFile(result.license(), result.claims(), entry.key());
+  }
+
+  /**
+   * Exact match against the two documented literal values -- LicenseFile's alg is always ed25519
+   * and always one of exactly these two literals, unlike MachineFile's compound
+   * encryption-prefix/signature-suffix alg space across 5 schemes.
+   */
+  private void requireSupportedAlg() {
+    if (!ALG_PLAIN.equals(certificate.alg) && !ALG_ENCRYPTED.equals(certificate.alg)) {
+      throw new TamgaCheckoutException.UnsupportedAlgorithmException(
+          "Unsupported license file algorithm: '" + certificate.alg + "'. Only ed25519-signed "
+              + "license files are supported.");
+    }
+  }
+
+  /**
+   * Decodes, decrypts and expiry-checks the payload of a file whose signature has ALREADY
+   * verified. Never call this on unverified bytes.
+   */
+  private License.LicenseWithClaims decodeVerified(String licenseKey, long nowUnixSeconds) {
     byte[] payloadBytes =
         Base64Codec.decodeOrThrow(certificate.enc, "License file 'enc' is not valid base64.");
 
@@ -165,8 +234,8 @@ public final class LicenseFile {
     } else if (ALG_PLAIN.equals(certificate.alg)) {
       jsonBytes = payloadBytes;
     } else {
-      // Defensive: unreachable in practice since verify() above already validated alg is one of
-      // these two exact literals and throws immediately if that fails.
+      // Defensive: unreachable in practice since the alg check above already validated alg is one
+      // of these two exact literals and throws immediately if that fails.
       throw new TamgaCheckoutException.UnsupportedAlgorithmException(
           "Unsupported license file algorithm: '" + certificate.alg + "'.");
     }
@@ -187,5 +256,33 @@ public final class LicenseFile {
     }
 
     return result;
+  }
+
+  /**
+   * Reads the {@code kid} claim out of bytes NOTHING has vouched for, or {@code null} if it cannot
+   * be read at all.
+   *
+   * <p>Only ever called once every trusted key has already failed to verify the signature, and its
+   * result is used for one thing: choosing between "your key set is stale" and "this file is
+   * forged". It selects nothing and trusts nothing. Any failure -- unparseable base64, a wrong
+   * license key, malformed JSON -- collapses to {@code null}, which reports the plain signature
+   * failure, because a file that will not say which key signed it has told us nothing to act on.
+   */
+  private String unverifiedKeyId(String licenseKey) {
+    try {
+      byte[] payloadBytes = Base64Codec.decodeOrNull(certificate.enc);
+      if (payloadBytes == null) {
+        return null;
+      }
+      byte[] jsonBytes = payloadBytes;
+      if (ALG_ENCRYPTED.equals(certificate.alg)) {
+        jsonBytes = EncryptedPayloadDecryptor.decrypt(payloadBytes,
+            Hkdf.deriveLicenseFileKey(licenseKey), "Encrypted license file");
+      }
+      JsonNode kid = TamgaJsonMapper.instance().readTree(jsonBytes).path("meta").get("kid");
+      return kid == null || kid.isNull() ? null : kid.asText();
+    } catch (IOException | RuntimeException e) {
+      return null;
+    }
   }
 }
