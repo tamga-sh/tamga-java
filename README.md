@@ -422,6 +422,31 @@ boundaries, not oversights.
   `GET /machines/{id}`, the machine list, `check-out` and `generate-offline-proof`, while
   `create`/activate, `ping-heartbeat`, `reset-heartbeat` and `PATCH /machines/{id}` report the
   600s fallback, and nothing on the wire says which kind you are holding.
+
+  **The ping interval is floored at one second** — `HeartbeatScheduler.MINIMUM_INTERVAL`, applied
+  by `Builder.interval(...)`, `intervalForWindow(...)` and the process scheduler alike. A `500ms`
+  `Duration` becomes `1s`; `45s` is untouched. The parameter is a `Duration` while the policy
+  field is `heartbeat_duration` in **seconds**, so a hand-rolled unit conversion lands in the
+  clamped range by ordinary mistake. It is a floor rather than a check on what
+  `ScheduledExecutorService.scheduleAtFixedRate` refuses, because that method rejects a period of
+  `0` and honours a period of `1` *exactly*, at ~1000 pings a second — a rule guarding only what
+  the runtime refuses would clamp `0` and wave `1` through, which describes where a number came
+  from rather than what it does. Null, zero and negative still mean "unspecified" and keep the
+  `DEFAULT_INTERVAL` fallback.
+
+  ⚠️ **The server judges liveness on truncated whole seconds**, which is easy to restate
+  pessimistically. `heartbeat_status_within` compares
+  `(now - last_heartbeat_at).num_seconds() <= window_secs`, and chrono's `num_seconds()`
+  truncates, so a machine reads `DEAD` only once its age reaches `window_secs + 1` seconds — every
+  window carries one free second. A 1s window is therefore served comfortably by a 1s ping (2s of
+  slack, not zero), which is what makes a flat floor safe on short windows. What the floor *does*
+  cost is the `/3` divisor's promise of two tolerable consecutive losses: `heartbeat_duration` 3
+  is the first window where floor and divisor agree, 2 keeps one spare ping, 1 keeps none, and
+  steady state holds all three. The only window it cannot hold is `0`, whose entire grace *is*
+  that free second; chasing it would need a ~333ms ping, tying this SDK's request rate to a
+  truncation artifact rather than a protocol guarantee, so it deliberately does not. A negative
+  window is unserveable at any rate. The whole interaction is pinned window by window in
+  `SchedulerWindowTest`.
 - **A heartbeat scheduler must never stop on a status — any status.** The only terminal signal
   from a ping is a **404** (`TamgaApiException.NotFoundException`), which means the row is gone;
   hang re-activation off that. A stale machine is always one successful ping away from `ALIVE`,
