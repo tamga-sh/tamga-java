@@ -141,10 +141,96 @@ source doc for the full set, including analytics/EE items that don't touch this 
   body**, so an "optional release" return type that cannot distinguish 204 from a decode failure
   is wrong; omitting `constraint` defaults to patch-only (`~x.y.z`); omitting `channel` matches
   **every** channel including alpha and dev, so require it at the API level; the handler uses a
-  bare query extractor, so a malformed query answers **plain-text 400**, not JSON:API. The
-  artifact-download route exists too, but every credential this SDK issues is currently refused by
-  it (`artifact.download` is in no role's default permission set) — that one is genuinely blocked
-  upstream.
+  bare query extractor, so a malformed query answers **plain-text 400**, not JSON:API.
+- **The artifact read and download routes are reachable now, and are implemented.** The previous
+  directive here — "`artifact.download` is in no role's default permission set, so that one is
+  genuinely blocked upstream" — was true when written and is no longer: tamga-api `e6d317b`
+  ("grant artifact.download explicitly and gate the download route") added `artifact.download` to
+  `Role::LicenseToken` (`authz/mod.rs:265`) and routed a real handler. It added exactly that one
+  string; `artifact.read` (`:264`) was already there, so listing and showing an artifact's metadata
+  was never the blocked half — only fetching its bytes was.
+  `listArtifacts`, `getArtifact` and `requestArtifactDownload` cover them. Three constraints the
+  implementation encodes, each with a plausible wrong answer:
+  - **The download answers `303 See Other`** to a short-lived presigned storage URL, and the
+    client always sends `?redirect=false` instead, then hands the caller a URL to fetch with **no**
+    credentials. Two measured reasons, either sufficient. (a) Credentials survive a followed
+    redirect: probed against okhttp 5.4.0 with a two-server harness, a *cross-origin* redirect
+    strips `Authorization` but replays a directly-set `Cookie` — which is exactly how
+    `AuthTransport.sessionCookie` sends its credential — while a *same-origin* redirect carries
+    both intact, licence key included. Same-origin is a supported deployment: an `s3_endpoint`
+    with path-style addressing serves storage from the API's own origin. (b) Following it buffers
+    the artifact, and `Transport` caps a response at 32 MiB while the server accepts 1 GiB uploads.
+    The `OkHttpClient` this SDK builds also refuses redirects outright, so the `303` would surface
+    as an error rather than being followed, but a caller supplying their own client opts out of
+    that. Both behaviours are OkHttp's own and not portable. Measured on the two clients a Java
+    application would actually use, both credential kinds on one request, first leg asserted:
+
+    | followed redirect | okhttp 5.4.0 | `java.net.http.HttpClient` (JDK 17) |
+    |---|---|---|
+    | cross-origin | `Authorization` stripped, **`Cookie` forwarded** | both stripped |
+    | same-origin | both forwarded | both forwarded |
+
+    Note the JDK client strips a directly-set `Cookie` cross-origin, which the fleet's working
+    generalisation ("platforms protect the header named `Authorization`, not credentials by
+    nature") does not predict — four other runtimes forward it. So do not carry any of these
+    findings to another port, or to another client in this one, without re-measuring. What every
+    measurement so far agrees on is the same-origin case: everything forwards.
+  - **`redirectUrl` is server-chosen input, so it is validated before being handed back.** Absent,
+    relative, or any scheme but `http`/`https` (`file:` being the obvious one) is refused with
+    `TamgaTransportException`. `HttpUrl.parse` is the check: measured to return null for `file:`,
+    `ftp:`, `jar:`, `javascript:`, a relative path and a Windows path, while accepting the scheme
+    case-insensitively. "It parsed" is a weaker test than "it is an HTTP URL" and several of this
+    fleet's ports had only the former.
+  - **A bad `ttl` answers `422 PRESIGN_TTL_INVALID`, not `TTL_INVALID`** (`artifacts/service.rs:33`
+    vs `check_out_license.rs:48`). The prefix matters: `TamgaApiException.TtlInvalidException` is
+    keyed on the unprefixed code, so the download's version does **not** land there. The client
+    validates the range locally against the server's own bounds, so a caller should not be able to
+    provoke it at all.
+  - **`ArtifactAttributes` is `rename_all = "camelCase"` AND carries explicit
+    `#[serde(rename = "created")]` / `#[serde(rename = "updated")]`** (`artifacts/serializer.rs:20`,
+    `:34-37`). So the wire names are `redirectUrl` but `created`/`updated` — **not**
+    `createdAt`/`updatedAt`. Applying camelCase uniformly reads two null timestamps and nothing
+    complains. `Release` carries the same pair of rules.
+  - **The download handler enforces the owning release's read gate as well as the permission**
+    (`releases::service::enforce_release_access`), so a `403` there is not necessarily an auth
+    misconfiguration: a `CLOSED` distribution strategy admits only admins, developers and product
+    tokens. Suspension, expiry and entitlements are checked on the same path, and all four
+    refusals carry the generic `FORBIDDEN` code, differing only in `detail`.
+
+  `artifact.create` / `.update` / `.delete` remain absent from `Role::LicenseToken`, so create,
+  update, delete and upload stay out of scope and are deliberately not modelled.
+- **The fingerprint a caller supplies is stored raw, so canonicalising it is the SDK's job.**
+  `fingerprint TEXT NOT NULL` — no length limit, no `CHECK`, no normalisation — unique per
+  `(license_id, fingerprint)`. All eight SDKs sent the caller's string byte-for-byte, so
+  `"ABC-123"`, `"abc-123"` and `" ABC-123 "` were three machines on three seats. `Fingerprint`
+  fixes the combining rule and nothing else. Two boundaries that must not move:
+  - **It reads no hardware identifiers, and must not start.** What identifies a machine is a
+    product decision — a cloned VM template shares them, a container has none, a replaced
+    motherboard changes them — and no default suits both a desktop app and a Kubernetes sidecar.
+  - **Do not add Unicode normalisation, even though the JDK has `java.text.Normalizer`.** NFC needs
+    a new dependency in Rust and Go and ICU or hand-rolled tables in C11, so a rule Java alone
+    could implement would make Java the port that silently disagrees with the other seven: one
+    machine, two fingerprints, two seats. The absence is a constraint, not an oversight.
+
+  Two Java-specific traps, both pinned by tests and both confirmed by mutation:
+  - `String.trim()` strips every character at or below U+0020, which is wider than the spec's
+    ASCII whitespace set, so it would swallow a leading NUL or BEL that must be **rejected**.
+    `String.strip()` is wrong the other way: it removes Unicode whitespace (U+2028, U+3000 — but
+    NOT U+00A0, which `Character.isWhitespace` rejects, so a test built only on U+00A0 passes
+    under `strip()` and proves nothing).
+  - **Read the vector file as UTF-8 explicitly.** Java's platform default is only UTF-8 from Java
+    18 (JEP 400), this artifact targets 11, and CI has a `windows-latest` leg on Temurin 17 where
+    the default is the ANSI code page. One vector holds a raw non-ASCII byte; every other is pure
+    ASCII, so a mis-decoding reader looks green everywhere except that one leg.
+    `FingerprintVectors.assertDecodedAsUtf8()` states the failure instead of leaving it as a digest
+    mismatch.
+
+  Note on the sort: the spec says bytewise over UTF-8, and the implementation does that, but **no
+  test here can distinguish it from `String.compareTo`**. Labels are unique and ASCII-printable, so
+  two components always differ at an ASCII position inside `label=`, before any value is reached —
+  and at an ASCII position byte order, UTF-16 code-unit order and code-point order coincide. The
+  sort mutations that do bite are label-only-vs-whole-component and case-insensitivity.
+
 - **Auth IS enforced server-side, and license-key auth is off by default.** The previous claim
   here ("no auth is enforced today") was false. Every endpoint this SDK calls is authenticated,
   and `Authorization: License <key>` additionally requires the license's policy to set
@@ -437,6 +523,37 @@ source doc for the full set, including analytics/EE items that don't touch this 
   Upstream note: the server test `rsa_public_key_is_spki_der` asserts only `len > 256`, which both
   270-byte PKCS#1 and 294-byte SPKI satisfy — so it passes while asserting the opposite of what its
   name claims, and cannot catch this discrepancy.
+- **A file's `kid` names the account's Ed25519 key WHATEVER scheme signed it, and that governs the
+  whole key-set design.** `key_id` is `lowercase_hex(SHA-256(the public key's base64 STRING)[0..8])`
+  — 16 characters, over the stored string and never the 32 decoded bytes, the same trap as the
+  signature covering `enc`'s base64 string (`Ed25519.keyId`, pinned by `Ed25519KeyIdTest` against
+  vectors this repo did not generate, including a negative case for the decode-first answer).
+  `GET /v1/accounts/{id}/signing-keys` serves that id as the resource **`id`**
+  (`accounts/serializer.rs:123`, documented at `:103`), so `SigningKeySet.of` indexes by what the
+  server sent and computes the id only as a cross-check. ⚠️ Lookup matches the **served id alone**
+  — a fleet-wide rule shared with tamga-rust and tamga-dotnet. A served/computed disagreement is
+  its own reportable condition (`mismatchedKeyIds()`), never a fallback lookup: matching the
+  computed id as a second spelling would invent a rule the wire does not have and absorb the one
+  signal that says the server's metadata is wrong. It costs nothing, because keys are tried against
+  the signature before any id is consulted — the rule only decides which error a file that verified
+  under no key reports. Three consequences that are easy to get wrong:
+  (1) `check_out_machine.rs:86-99` picks the *signing* key by scheme but `:127` derives the `kid`
+  from `account.ed25519_public_key` **unconditionally**, so an RSA/ECDSA machine file names a key
+  that cannot verify it — `MachineFile`'s key-set path therefore refuses any suffix but `ed25519`
+  rather than doing a scheme-agnostic lookup. ⚠️ The 12 machine-file fixtures **disagree with the
+  server here**: their generator derived each `kid` from that file's own signing key, so they carry
+  four distinct kids where production emits one. Measured, not assumed. Use them to pin the hash
+  rule and nothing else.
+  (2) An account whose public-key column was never populated stamps `key_id("")` =
+  `e3b0c44298fc1c14` on every file it signs while signing with a real private key — its own
+  condition (`SigningKeyNotPublishedException`), because refetching keys cannot fix it.
+  (3) Verification tries **every** key against the signature before reading the `kid`, never the
+  reverse: the claim lives inside the signed payload, and this both preserves the "authenticate
+  before parsing" rule and lets an `e3b0c44298fc1c14` file verify normally when the real key is
+  held. An unknown `kid` is `UnknownSigningKeyException`, never
+  `SignatureVerificationException` — collapsing the two is the M22 defect itself.
+  The route needs `account.read`, which `LicenseToken` lacks, so an embedded client must pin keys
+  via `SigningKeySet.ofPublicKeys`; `listSigningKeys()` is for admin-token callers.
 - **`RSA_2048_JWT_RS256` is rejected for machine files.** `MachineFile.verify` throws
   `TamgaCheckoutException.SchemeNotSupportedException` before attempting any verification — and
   before `alg` is even parsed — matching the server's `422 SCHEME_NOT_SUPPORTED`. No JWT

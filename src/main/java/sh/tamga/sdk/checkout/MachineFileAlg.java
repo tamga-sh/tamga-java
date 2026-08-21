@@ -62,6 +62,46 @@ final class MachineFileAlg {
    *     onto {@code rsa-sha256}, so it throws rather than relying on its only caller.
    */
   static MachineFileAlg parse(String alg, LicenseScheme scheme) {
+    Parsed parsed = split(alg);
+    String expected = signingSuffixFor(scheme);
+    if (!expected.equals(parsed.signingSuffix)) {
+      // The scheme the caller passed governs; this only catches a file that was issued under a
+      // different scheme than the license the caller is holding says it uses.
+      throw reject(alg, "declares signing suffix '" + parsed.signingSuffix + "' but the license "
+          + "scheme " + scheme + " signs with '" + expected + "'");
+    }
+    return new MachineFileAlg(parsed.encrypted);
+  }
+
+  /**
+   * Parses and requires the {@code ed25519} signing suffix -- the only one a {@link SigningKeySet}
+   * can serve.
+   *
+   * <p>Not a shortcut but a server-side limit: the only keys an account publishes are Ed25519
+   * ({@code rotate_ed25519} is the sole writer, and the RSA/ECDSA signing keys are neither
+   * published nor rotated), and both checkout handlers compute the {@code kid} claim from {@code
+   * account.ed25519_public_key} whatever scheme actually signed the bytes -- so on an RSA- or
+   * ECDSA-signed file the claim names a key that did not sign it, and matching on it would be
+   * worse than useless.
+   *
+   * <p>Unlike {@link #parse}, there is no caller-supplied scheme to cross-check against here, so
+   * this is the one place the file's own {@code alg} does select something: it selects nothing but
+   * refusal. An {@code alg} claiming {@code ed25519} on a file signed with something else simply
+   * fails every signature check in the set.
+   */
+  static MachineFileAlg parseEd25519(String alg) {
+    Parsed parsed = split(alg);
+    if (!SUFFIX_ED25519.equals(parsed.signingSuffix)) {
+      throw reject(alg, "a signing key set holds Ed25519 keys only, but this file declares "
+          + "signing suffix '" + parsed.signingSuffix + "' -- verify it against the license's own "
+          + "scheme instead, and accept that a key rotation is not a distinguishable outcome "
+          + "for it");
+    }
+    return new MachineFileAlg(parsed.encrypted);
+  }
+
+  /** Splits and validates the structure, version marker and encoding, ignoring the suffix. */
+  private static Parsed split(String alg) {
     int firstPlus = alg.indexOf('+');
     int lastPlus = alg.lastIndexOf('+');
     // firstPlus == 0 would mean an empty encoding; lastPlus == firstPlus means there is only one
@@ -87,16 +127,18 @@ final class MachineFileAlg {
       throw reject(alg, "unknown payload encoding '" + encoding + "'");
     }
 
-    String signingSuffix = alg.substring(firstPlus + 1, lastPlus);
-    String expected = signingSuffixFor(scheme);
-    if (!expected.equals(signingSuffix)) {
-      // The scheme the caller passed governs; this only catches a file that was issued under a
-      // different scheme than the license the caller is holding says it uses.
-      throw reject(alg, "declares signing suffix '" + signingSuffix + "' but the license scheme "
-          + scheme + " signs with '" + expected + "'");
-    }
+    return new Parsed(encrypted, alg.substring(firstPlus + 1, lastPlus));
+  }
 
-    return new MachineFileAlg(encrypted);
+  /** The two halves of an {@code alg} string that survive structural validation. */
+  private static final class Parsed {
+    private final boolean encrypted;
+    private final String signingSuffix;
+
+    Parsed(boolean encrypted, String signingSuffix) {
+      this.encrypted = encrypted;
+      this.signingSuffix = signingSuffix;
+    }
   }
 
   private static String signingSuffixFor(LicenseScheme scheme) {

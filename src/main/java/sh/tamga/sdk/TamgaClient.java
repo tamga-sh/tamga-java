@@ -15,12 +15,14 @@ import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import okhttp3.HttpUrl;
 import okhttp3.OkHttpClient;
+import sh.tamga.sdk.checkout.SigningKeySet;
 import sh.tamga.sdk.error.TamgaActivationValidationException;
 import sh.tamga.sdk.error.TamgaApiException;
 import sh.tamga.sdk.error.TamgaMachineOverLimitException;
 import sh.tamga.sdk.error.TamgaTransportException;
 import sh.tamga.sdk.model.ActivationOptions;
 import sh.tamga.sdk.model.ActivationResult;
+import sh.tamga.sdk.model.Artifact;
 import sh.tamga.sdk.model.CheckOutOptions;
 import sh.tamga.sdk.model.Component;
 import sh.tamga.sdk.model.CreateComponentOptions;
@@ -40,6 +42,7 @@ import sh.tamga.sdk.model.Policy;
 import sh.tamga.sdk.model.Process;
 import sh.tamga.sdk.model.Release;
 import sh.tamga.sdk.model.Scope;
+import sh.tamga.sdk.model.SigningKey;
 import sh.tamga.sdk.model.UpdateMachineOptions;
 import sh.tamga.sdk.model.UpgradeCheckOptions;
 import sh.tamga.sdk.model.UpgradeCheckResult;
@@ -299,6 +302,67 @@ public final class TamgaClient {
       query.put("ttl", Integer.toString(opts.ttl()));
     }
     return transport.getText(segments, query);
+  }
+
+  // ----------------------------------------------------------- signing keys
+
+  /**
+   * Lists the account's published Ed25519 signing keys, current and retired.
+   *
+   * <p>This is what makes a key rotation survivable offline. An offline {@code .lic} or {@code
+   * .machine} file names the key that signed it in its {@code kid} claim, and a client holding a
+   * file issued before the last rotation needs that key -- see {@link SigningKeySet}. Retired keys
+   * are included by design; that is the point of the route.
+   *
+   * <p><b>A license-key credential cannot call this.</b> The route requires the {@code
+   * account.read} permission, which is not in the {@code LicenseToken} permission set, so
+   * {@link AuthTransport#licenseKey(String)} answers {@code 403}
+   * ({@link TamgaApiException.ForbiddenException}) here however well-formed the request is. Unlike
+   * {@link #getPolicy} and {@link #getLicensePolicy} there is no second route reaching the same
+   * resource under a permission a license key does hold.
+   *
+   * <p>That is not fatal to offline verification, and building a product around this call would be
+   * the mistake: a key set does not have to arrive over the wire. Pin the account's published keys
+   * into the application with {@link SigningKeySet#ofPublicKeys}, or fetch them from a build step
+   * or a server of your own holding an admin token. <b>An offline verifier that only works while
+   * it has a network is not offline.</b>
+   *
+   * <p><b>An empty list is normal, not an error.</b> {@code account_signing_keys} is written only
+   * by the rotation path, which backfills the account's current key on its way through, so an
+   * account that has never rotated has no rows at all and this answers {@code []}. Pin the current
+   * public key rather than treating that as a failure.
+   *
+   * <p>Only public halves come back: the server's own row type has no field for a private key, so
+   * one cannot leak through this route.
+   *
+   * @return the keys newest first, as the server orders them; never null.
+   */
+  public List<SigningKey> listSigningKeys() {
+    JsonNode root = transport.getJson(Collections.singletonList("signing-keys"), null);
+    List<SigningKey> items = new ArrayList<>();
+    for (JsonNode node : root.path("data")) {
+      SigningKey key = SigningKey.fromResourceNode(node);
+      if (key != null) {
+        items.add(key);
+      }
+    }
+    return Collections.unmodifiableList(items);
+  }
+
+  /**
+   * Fetches the account's signing keys and indexes them for offline verification -- {@link
+   * SigningKeySet#of}{@code (}{@link #listSigningKeys()}{@code )}.
+   *
+   * <p>One call, cacheable for the life of the process: pass the result to
+   * {@link sh.tamga.sdk.checkout.LicenseFile#verifyWithClaims(SigningKeySet, String, long)} or its
+   * machine-file counterpart. Every caveat on {@link #listSigningKeys()} applies, in particular
+   * that a license-key credential is refused with {@code 403}.
+   *
+   * <p>Unusable rows -- a future non-Ed25519 algorithm, a key that does not decode -- are skipped
+   * rather than failing the whole set; {@link SigningKeySet#skippedKeyIds()} names them.
+   */
+  public SigningKeySet signingKeySet() {
+    return SigningKeySet.of(listSigningKeys());
   }
 
   // ---------------------------------------------------------------- machines
@@ -829,7 +893,7 @@ public final class TamgaClient {
     entitlementCache.invalidate(licenseId);
   }
 
-  // ------------------------------------------------- releases and diagnostics
+  // ----------------------------------------------------------------- releases
 
   /**
    * Asks whether a newer release is available for an installed version.
@@ -852,8 +916,9 @@ public final class TamgaClient {
    * error document, so it surfaces with the synthetic {@code UNKNOWN} code the error path uses for
    * any non-JSON:API body.
    *
-   * <p>No download URL comes back. The artifact-download route exists, but no credential this SDK
-   * issues is permitted to use it, so obtaining the build itself is the application's problem.
+   * <p>No download URL comes back on this route -- the release resource carries none. Fetch the
+   * offered release's artifacts with {@link #listArtifacts} and mint a URL for the one you want
+   * with {@link #requestArtifactDownload(String)}.
    *
    * @param options the product, platform, file type, installed version and channel to check
    * @return the offered release, or {@link UpgradeCheckResult#none()}
@@ -873,6 +938,186 @@ public final class TamgaClient {
     }
     return UpgradeCheckResult.of(release);
   }
+
+  // --------------------------------------------------------------- artifacts
+
+  /**
+   * Lists a release's artifacts, one keyset-paginated page at a time.
+   *
+   * <p>Keyset, like {@link #listComponents}: this route takes {@code limit} and
+   * {@code page[after]}, sends no {@code meta.page} and no {@code links}, so the next cursor is
+   * synthesized from the last row's id when a full page came back.
+   *
+   * <p>{@link Artifact#redirectUrl()} is {@code null} on every row here. The field is omitted
+   * entirely by the list and show routes; only {@link #requestArtifactDownload(String)} populates
+   * it.
+   *
+   * <p>Unlike the download action, this route enforces the {@code artifact.read} permission and
+   * nothing else -- it does not consult the owning release's access gate. A release whose build
+   * this license may not download can still have its artifact metadata listed.
+   *
+   * @param releaseId the release whose artifacts to list -- typically
+   *     {@code checkForUpgrade(...).release().id()}
+   */
+  public Page<Artifact> listArtifacts(String releaseId, ListOptions options) {
+    ListOptions opts = options == null ? ListOptions.defaults() : options;
+    JsonNode root = transport.getJson(Arrays.asList("releases", releaseId, "artifacts"),
+        pageQuery(opts));
+    List<Artifact> items = new ArrayList<>();
+    for (JsonNode node : root.path("data")) {
+      items.add(Artifact.fromResourceNode(node));
+    }
+    return new Page<>(synthesizeCursor(items.size(), opts, lastId(root)), items);
+  }
+
+  /**
+   * Reads one artifact's metadata.
+   *
+   * <p>Carries no download URL: {@link Artifact#redirectUrl()} is {@code null} here, as on the
+   * listing. Use {@link #requestArtifactDownload(String)} to obtain one.
+   */
+  public Artifact getArtifact(String artifactId) {
+    JsonNode root = transport.getJson(Arrays.asList("artifacts", artifactId), null);
+    return Artifact.fromResourceNode(root.get("data"));
+  }
+
+  /**
+   * Asks the server for a short-lived presigned URL to an artifact's bytes, at the server's
+   * default lifetime of {@link Artifact#DEFAULT_DOWNLOAD_TTL}.
+   *
+   * <p>Equivalent to {@link #requestArtifactDownload(String, Duration)} with a null lifetime.
+   */
+  public Artifact requestArtifactDownload(String artifactId) {
+    return requestArtifactDownload(artifactId, null);
+  }
+
+  /**
+   * Asks the server for a short-lived presigned URL to an artifact's bytes, and returns the
+   * artifact with {@link Artifact#redirectUrl()} populated.
+   *
+   * <p><b>This method does not fetch the bytes, deliberately.</b> The URL it returns points at the
+   * object store rather than at the API, and the presigned query string is the entire
+   * authorisation on it. Fetch it with a client that sends <em>no</em> credentials: no
+   * {@code Authorization} header, no session cookie. Passing this SDK's licence key to a storage
+   * host would hand a live credential to a third party, and this SDK cannot do it on your behalf
+   * even by accident -- {@link Transport} builds every URL from the one configured API host, so it
+   * has no way to address the storage host at all.
+   *
+   * <p><b>Why the redirect is never followed.</b> The route answers {@code 303 See Other} by
+   * default, pointing at that same presigned URL, and this SDK always sends
+   * {@code ?redirect=false} instead so the URL comes back in the body. Two independent reasons,
+   * both measured rather than assumed:
+   *
+   * <ul>
+   *   <li><b>Credentials follow the redirect, and which one depends on the origin.</b> Probed
+   *       against okhttp 5.4.0 with a two-server harness, both credential kinds this SDK issues on
+   *       the same request, and the first leg asserted so "absent" means stripped rather than
+   *       never sent. On a <em>cross-origin</em> redirect OkHttp strips {@code Authorization} --
+   *       where the bearer, basic and licence-key transports all put their credential -- but
+   *       replays a {@code Cookie} header set directly on the request, which is exactly how
+   *       {@code AuthTransport.sessionCookie} sends its own. On a <em>same-origin</em> redirect it
+   *       carries both intact, licence key included. Same-origin is not hypothetical: a server
+   *       configured with an {@code s3_endpoint} and path-style addressing serves storage from the
+   *       API's own origin. Note this is OkHttp's behaviour and not a portable one -- the same
+   *       probe on other runtimes in this fleet produced three different answers.
+   *   <li><b>Following it buffers the artifact.</b> The redirect target is the file, and
+   *       {@link Transport} reads a response into memory under a 32 MiB ceiling. An artifact
+   *       routinely exceeds that -- the server accepts uploads up to 1 GiB -- so a followed
+   *       redirect trades a URL for either an out-of-memory guard or a very expensive surprise.
+   *       This reason holds whatever the storage host's origin is.
+   * </ul>
+   *
+   * <p>The client built by {@link Builder} also refuses redirects outright
+   * ({@code followRedirects(false)}), so the default {@code 303} surfaces as an error rather than
+   * being followed -- but a caller who supplies their own {@link OkHttpClient} opts out of that
+   * protection, and {@code ?redirect=false} keeps this call correct for them too.
+   *
+   * <p>The URL that comes back is checked before it is handed over: absent, relative, or carrying
+   * any scheme but {@code http}/{@code https}, it is refused with a
+   * {@link sh.tamga.sdk.error.TamgaTransportException} rather than returned. It is chosen by the
+   * server, not by the caller, and goes straight to an HTTP client that would act on it.
+   *
+   * <p><b>A {@code 403} here is not necessarily an auth misconfiguration.</b> The handler enforces
+   * the owning release's read gate as well as the {@code artifact.download} permission
+   * ({@code artifacts/download_artifact.rs} calls
+   * {@code releases::service::enforce_release_access}), so the binary of a release whose product
+   * uses the {@code CLOSED} distribution strategy is refused to a licence key that genuinely holds
+   * the permission -- that strategy admits only admins, developers and product tokens
+   * ({@code releases/policy.rs:106-116}). The same {@code 403} also covers a suspended license, an
+   * expired one whose policy forbids new builds, and a license lacking the release's entitlements.
+   * All four carry the generic code {@code FORBIDDEN} and differ only in {@code detail}, so treat
+   * the code as "not for this license" rather than as a credential problem to retry.
+   *
+   * <p>A {@code 422 STORAGE_UNAVAILABLE} means the server has no object storage configured. A
+   * lifetime outside the accepted range that reaches the server comes back as {@code 422
+   * PRESIGN_TTL_INVALID} -- note the prefix: that is a different code from the {@code TTL_INVALID}
+   * the checkout routes use, so it does <b>not</b> arrive as
+   * {@link TamgaApiException.TtlInvalidException}. The range is checked here anyway, so a caller
+   * should not be able to provoke it.
+   *
+   * @param artifactId the artifact to mint a URL for
+   * @param ttl how long the URL should stay valid, between {@link Artifact#MIN_DOWNLOAD_TTL} and
+   *     {@link Artifact#MAX_DOWNLOAD_TTL}, or {@code null} for the server's
+   *     {@link Artifact#DEFAULT_DOWNLOAD_TTL}. Pick one that outlasts the download itself: the URL
+   *     expires while a slow transfer is still running.
+   * @throws IllegalArgumentException if {@code ttl} is outside the range the server accepts, which
+   *     is checked here so it costs no round trip
+   */
+  public Artifact requestArtifactDownload(String artifactId, Duration ttl) {
+    Map<String, String> query = new LinkedHashMap<>();
+    // Always explicit, never omitted -- the default is the 303 this SDK must not follow.
+    query.put("redirect", "false");
+    if (ttl != null) {
+      if (ttl.compareTo(Artifact.MIN_DOWNLOAD_TTL) < 0
+          || ttl.compareTo(Artifact.MAX_DOWNLOAD_TTL) > 0) {
+        throw new IllegalArgumentException("A download URL lifetime must be between "
+            + Artifact.MIN_DOWNLOAD_TTL.getSeconds() + " and "
+            + Artifact.MAX_DOWNLOAD_TTL.getSeconds() + " seconds, but was " + ttl.getSeconds()
+            + ".");
+      }
+      query.put("ttl", Long.toString(ttl.getSeconds()));
+    }
+    JsonNode root = transport.getJson(
+        Arrays.asList("artifacts", artifactId, "actions", "download"), query);
+    Artifact artifact = Artifact.fromResourceNode(root.get("data"));
+    if (artifact == null) {
+      throw new TamgaTransportException(
+          "The artifact download action answered with no artifact resource.");
+    }
+    requireFetchableUrl(artifact.redirectUrl());
+    return artifact;
+  }
+
+  /**
+   * Refuses a download URL this SDK would not itself be willing to fetch.
+   *
+   * <p>The URL is chosen by the server, not by the caller, and it is handed straight to whatever
+   * HTTP client the application uses. A value that is absent, relative, or carries a scheme other
+   * than {@code http}/{@code https} -- {@code file:} being the obvious one -- would point that
+   * client somewhere it was never meant to go, and "it parsed" is not the same test as "it is an
+   * HTTP URL". {@link HttpUrl#parse} answers exactly the right question: it returns null for every
+   * non-HTTP scheme, for a relative path and for a Windows path, and accepts the scheme
+   * case-insensitively.
+   *
+   * <p>The rejected value is not echoed into the message. A presigned URL carries its
+   * authorisation in the query string, and a message that quotes one lands in a log.
+   */
+  private static void requireFetchableUrl(String redirectUrl) {
+    if (redirectUrl == null || redirectUrl.isEmpty()) {
+      throw new TamgaTransportException("The artifact download action answered without a"
+          + " redirectUrl. Sending redirect=false is what asks for one, so a response missing it"
+          + " is not something a caller can act on.");
+    }
+    if (HttpUrl.parse(redirectUrl) == null) {
+      int colon = redirectUrl.indexOf(':');
+      String scheme = colon > 0 ? redirectUrl.substring(0, colon) : "none";
+      throw new TamgaTransportException("The artifact download action answered with a redirectUrl"
+          + " that is not an http or https URL (scheme: " + scheme + "). Refusing to hand it back"
+          + " rather than letting it reach an HTTP client that might follow it.");
+    }
+  }
+
+  // -------------------------------------------------------------- diagnostics
 
   /**
    * Reads the server's liveness report.

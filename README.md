@@ -146,7 +146,68 @@ if (upgrade.updateOffered()) {
 }
 ```
 
-**Note:** this SDK generates no machine fingerprint for you, and embeds no account public key.
+Fetching the build itself. The upgrade check hands back a release, not bytes; the bytes are its
+artifacts:
+
+```java
+import java.time.Duration;
+import sh.tamga.sdk.model.Artifact;
+import sh.tamga.sdk.model.ListOptions;
+
+for (Artifact artifact : client.listArtifacts(upgrade.release().id(), ListOptions.defaults())
+    .items()) {
+  if (!"darwin".equals(artifact.platform())) {
+    continue;
+  }
+  // Returns the artifact with redirectUrl populated. It does NOT fetch the bytes, deliberately.
+  Artifact download = client.requestArtifactDownload(artifact.id(), Duration.ofMinutes(30));
+  fetchWithNoCredentials(download.redirectUrl(), artifact.checksum());
+}
+```
+
+**Send no credentials to `redirectUrl()`.** It points at object storage, not at the API, and its
+presigned query string is the whole authorisation. Use a plain HTTP client with no auth header and
+no session cookie on it, and verify `checksum()` afterwards.
+
+The route's own default is a `303 See Other` to that URL, which this SDK never takes: it asks for
+`?redirect=false` and hands you the URL instead, and the client it builds refuses redirects
+outright. Two measured reasons, either one sufficient:
+
+- **Credentials survive the hop, and which one depends on the origin.** Probed against okhttp
+  5.4.0 with both credential kinds on one request: on a *cross-origin* redirect OkHttp strips
+  `Authorization` — where bearer, basic and licence-key auth all live — but replays a `Cookie`
+  header set directly on the request, which is how the session-cookie transport sends its
+  credential. On a *same-origin* redirect it carries both, licence key included, and a server with
+  an `s3_endpoint` and path-style addressing serves storage from the API's own origin. This is
+  OkHttp's behaviour, not a portable one.
+- **Following it buffers the file.** The redirect target is the artifact itself, and the transport
+  reads responses into memory under a 32 MiB ceiling while the server accepts uploads up to 1 GiB.
+  This one holds regardless of where storage lives.
+
+`redirectUrl` is checked before you get it: absent, relative, or carrying any scheme but
+`http`/`https`, it is refused with a `TamgaTransportException` rather than returned. The server
+chooses that value and you would hand it straight to an HTTP client, so "it parsed" is not the test
+that matters.
+
+Your own fetch: both Java clients were measured, with both credential kinds on one request and the
+first leg asserted so "absent" means stripped rather than never sent.
+
+| followed redirect | okhttp 5.4.0 | `java.net.http.HttpClient` (JDK 17) |
+|---|---|---|
+| cross-origin | `Authorization` stripped, **`Cookie` forwarded** | both stripped |
+| same-origin | both forwarded | both forwarded |
+
+The two disagree on the cross-origin case, so which client you fetch with changes what leaks — and
+they agree that a **same-origin** redirect forwards everything. Send no credentials and the
+question does not arise.
+
+A `403` here is not necessarily a credential problem: the handler enforces the owning release's
+read gate as well as the `artifact.download` permission, so a product on the `CLOSED` distribution
+strategy refuses a licence key that genuinely holds the permission. Suspension, expiry and missing
+entitlements land on the same status with the same generic `FORBIDDEN` code.
+
+**Note:** this SDK does not decide what your machine fingerprint is made of, and embeds no account
+public key.
 Producing a stable, device-specific fingerprint and deciding your grace-period and enforcement
 policy remain application concerns — see [Known gaps](#known-gaps).
 
@@ -188,6 +249,59 @@ public final class Quickstart {
   }
 }
 ```
+
+## Machine fingerprints
+
+The server stores `fingerprint TEXT NOT NULL` — no length limit, no `CHECK`, no normalisation —
+unique per `(license_id, fingerprint)`. Every SDK in this fleet sent your string byte-for-byte, so
+`"ABC-123"`, `"abc-123"` and `" ABC-123 "` were three machines on three seats of one license. A
+trailing newline off a config file or a shelled-out command is the usual way that happens.
+
+`Fingerprint` combines caller-chosen components into one canonical string, identically in all eight
+SDKs:
+
+```java
+import sh.tamga.sdk.model.Fingerprint;
+
+String fingerprint = Fingerprint.builder()
+    .add("machine-id", readMachineId())   // whatever your product decides identifies a machine
+    .add("disk", diskSerial())
+    .build();                             // 64 lowercase hex characters
+
+client.activateMachine(CreateMachineOptions.of(fingerprint, licenseId), null);
+```
+
+**It reads no hardware identifiers.** What identifies a machine is a product decision — a cloned VM
+template shares its identifiers, a container has none, a replaced motherboard changes them — so the
+components are yours and this only fixes how they are combined.
+
+The rule:
+
+```
+fingerprint = lowercase_hex(SHA-256(UTF-8(canonical)))
+canonical   = "tamga-fingerprint-v1" US join(US, sort_bytewise(label + "=" + trimmed_value))
+```
+
+`US` is U+001F, one byte. The literal prefix is a domain separator, so a future v2 rule cannot
+collide with v1 output.
+
+- **Order does not matter** — components are sorted, so the order you add them in is your own
+  convenience.
+- **Whitespace is trimmed from values**, using the spec's ASCII set (space, tab, CR, LF, VT, FF).
+  Not `String.trim()`, which strips everything at or below U+0020 and would swallow a leading NUL
+  that must be *rejected*; not `String.strip()`, which strips Unicode whitespace that must survive.
+- **Case is preserved.** Lowercasing a base64 or hex identifier corrupts it.
+- **Values are not Unicode-normalised, deliberately.** The JDK has `java.text.Normalizer` and this
+  does not call it: NFC needs a new dependency in Rust and Go, and ICU or hand-rolled tables in
+  C11. A rule eight ports cannot implement identically would give one machine two fingerprints
+  depending on which SDK the app was written in — silently consuming two seats. Normalise before
+  calling if your values can arrive in more than one form.
+
+Invalid input throws `IllegalArgumentException` and is never quietly repaired — stripping a control
+character or de-duplicating a repeated label would map two different machines onto one seat, which
+is the defect this exists to close. Labels must be non-empty ASCII printable (0x21–0x7E) excluding
+`=`, and unique; values may be empty, may contain `=`, may be non-ASCII, and may contain no ASCII
+control character once trimmed.
 
 ## Offline verification
 
@@ -287,6 +401,64 @@ the same key from different endpoints.
 `MachineFile.validateTtl(int)` mirrors the server's `ttl` bounds (`> 0` and `<= 31536000`, i.e. 365
 days) so a checkout request can fail fast client-side.
 
+### Surviving a signing-key rotation
+
+When an account rotates its Ed25519 signing key, a file signed **before** the rotation is still
+authentic — but against the current key alone it fails with exactly the error a forged file
+produces. Verifying against a *key set* keeps the two apart.
+
+```java
+import sh.tamga.sdk.checkout.LicenseFile;
+import sh.tamga.sdk.checkout.SigningKeySet;
+import sh.tamga.sdk.checkout.VerifiedLicenseFile;
+import sh.tamga.sdk.error.TamgaCheckoutException;
+
+// Pin the account's published keys — no network needed, and the path an embedded client has.
+SigningKeySet keys = SigningKeySet.ofPublicKeys(currentKeyBase64, previousKeyBase64);
+
+try {
+  VerifiedLicenseFile verified =
+      LicenseFile.parse(pem).verifyWithClaims(keys, licenseKey, serverUnixSeconds);
+
+  verified.license();
+  verified.claims();
+  verified.key().isRetired();  // authentic, but issued before the last rotation
+} catch (TamgaCheckoutException.UnknownSigningKeyException e) {
+  // NOT a forgery: the file names a key this set does not hold. Refresh the key set.
+  e.keyId();
+  e.availableKeyIds();
+} catch (TamgaCheckoutException.SignatureVerificationException e) {
+  // The named key IS in the set and the signature still fails. Refuse the file.
+}
+```
+
+`MachineFile` has the same pair of entry points, minus the scheme argument —
+`verifyAndDecrypt(keys, licenseKey, fingerprint)` and
+`verifyWithClaims(keys, licenseKey, fingerprint, nowUnixSeconds)`.
+
+Three conditions are distinguishable, all subclasses of `TamgaCheckoutException`:
+
+| Condition | Meaning | What to do |
+|---|---|---|
+| `UnknownSigningKeyException` | The file names a key the set does not hold. | Refresh the key set or ship an update — the file may well be genuine. |
+| `SigningKeyNotPublishedException` | The file's `kid` is `keyId("")`, so the issuing account never published a public key. A subclass of the above. | Refetching cannot help; the account's key column has to be populated server-side. |
+| `NoUsableSigningKeyException` | The set holds no usable Ed25519 key at all. | Check what was pinned or fetched. An empty *published* set is normal for an account that has never rotated. |
+
+Three things are worth knowing before building on this:
+
+- **The keys do not have to come over the wire, and usually cannot.**
+  `TamgaClient.listSigningKeys()` / `signingKeySet()` read
+  `GET /v1/accounts/{accountId}/signing-keys`, which requires the `account.read` permission — a
+  license-key credential does not hold it and gets `403`. Pin the public keys instead. An offline
+  verifier that only works while it has a network is not offline.
+- **Key sets are Ed25519-only.** Only Ed25519 keys are ever published or rotated, so
+  `MachineFile`'s key-set entry points refuse an RSA- or ECDSA-signed file rather than guessing.
+  Verify those with the license's own scheme and a single public key.
+- **Signatures are checked before the `kid` claim is read.** Every key in the set is tried against
+  the signature first; the claim — which lives inside the signed payload — is only read once they
+  have all failed, and only to choose which error to report. It selects from keys you already
+  trust and can never introduce one.
+
 ### Offline proofs
 
 A lighter-weight "this machine is still valid" check for air-gapped environments. Proofs are always
@@ -363,8 +535,12 @@ boundaries, not oversights.
 
 **Left to your application**
 
-- **Machine fingerprints.** No SDK in the fleet generates one. Producing a stable, device-specific,
-  reasonably tamper-resistant fingerprint — and keeping it stable across reinstalls — is yours.
+- **Choosing what a machine fingerprint is made of.** No SDK in the fleet reads hardware
+  identifiers, and none will: a cloned VM template shares them, a container has none, a replaced
+  motherboard changes them, and no default is right for both a desktop app and a Kubernetes
+  sidecar. Producing a stable, device-specific, reasonably tamper-resistant set of components — and
+  keeping it stable across reinstalls — is yours. `Fingerprint` will combine them into one string
+  identically across all eight SDKs; see [Machine fingerprints](#machine-fingerprints).
 - **Embedding the account public key**, plus its rotation and key-id handling. Offline verification
   takes the key as a parameter; getting it into the binary is out of scope.
 - **Persistence.** Nothing is written to disk. Storing `.lic`/`.machine` files, deciding when to
@@ -531,9 +707,11 @@ boundaries, not oversights.
   the existence of a build the caller may not have. `UpgradeCheckResult.updateOffered() == false`
   therefore means *no update is available to you*, never *you are on the latest version*, and
   there is no client-side way to separate them. A suspended license is the exception: it comes
-  back as `403` rather than being folded into the `204`. No download URL is returned — the
-  artifact route exists but no credential this SDK issues may use it. RFC 9421
-  response-signature verification is still not implemented.
+  back as `403` rather than being folded into the `204`. No download URL is returned by the check
+  itself — the bytes hang off the release's artifacts, which `listArtifacts` and
+  `requestArtifactDownload` now reach (reading artifact metadata was always permitted to a licence
+  key; fetching the bytes was not, until `Role::LicenseToken` gained `artifact.download`. Creating,
+  updating, deleting and uploading artifacts remain out of reach and are not modelled). RFC 9421 response-signature verification is still not implemented.
 
 **Transport hardening**
 
