@@ -340,11 +340,22 @@ public final class Policy {
     }
   }
 
-  /** What happens to a machine row once its heartbeat window elapses. */
+  /**
+   * What the server's cull job does to a machine row once its heartbeat window elapses --
+   * <b>only when {@code require_heartbeat} is set</b>.
+   *
+   * <p>That column defaults to {@code false}, and the cull job early-returns on a policy that
+   * leaves it there, so on a default policy this strategy never runs and no machine is ever
+   * culled. A machine reporting {@link HeartbeatStatus#DEAD} is therefore not evidence that
+   * anything happened to its row: see {@link HeartbeatStatus#DEAD}.
+   */
   public enum HeartbeatCullStrategy {
-    /** Deletes the machine row once dead. The server's default. */
+    /**
+     * Deletes the machine row once its window elapses. The server's default -- but inert unless
+     * the policy also sets {@code require_heartbeat}.
+     */
     DEACTIVATE_DEAD("DEACTIVATE_DEAD"),
-    /** Keeps the dead machine row in place. */
+    /** Keeps the machine row in place after its window elapses. */
     KEEP_DEAD("KEEP_DEAD");
 
     private final String wireValue;
@@ -367,8 +378,13 @@ public final class Policy {
   }
 
   /**
-   * The grace window after a machine's heartbeat window elapses during which a fresh ping revives
-   * it rather than the cull strategy taking effect.
+   * The grace window the server's cull job honours after a machine's heartbeat window elapses,
+   * during which it revives the row rather than applying the cull strategy.
+   *
+   * <p>This bounds the <b>cull job</b>, not the ping endpoint. A client ping to a machine
+   * reporting {@link HeartbeatStatus#DEAD} always succeeds and always revives it -- the write is a
+   * bare {@code SET last_heartbeat_at = NOW()} with no resurrection check -- so nothing here is a
+   * reason to stop pinging a {@code DEAD} machine.
    */
   public enum HeartbeatResurrectionStrategy {
     /** No grace window. */

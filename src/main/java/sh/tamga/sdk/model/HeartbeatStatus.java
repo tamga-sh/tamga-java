@@ -10,7 +10,17 @@ public enum HeartbeatStatus {
   NOT_STARTED("NOT_STARTED"),
   /** Wire value {@code ALIVE} -- pinged within the window. */
   ALIVE("ALIVE"),
-  /** Wire value {@code DEAD} -- window elapsed with no ping. */
+  /**
+   * Wire value {@code DEAD} -- the window elapsed with no ping. <b>Nothing more.</b>
+   *
+   * <p>It does not mean the machine was culled, deleted or deactivated. The server derives this
+   * purely from {@code last_heartbeat_at} against the window and never consults the policy's
+   * {@code require_heartbeat}, which defaults to {@code false} and is what the cull job requires
+   * before it removes anything -- so on a default policy the row is never culled and reports
+   * {@code DEAD} indefinitely, seat still consumed. A ping to a {@code DEAD} machine succeeds and
+   * revives it. Keep pinging; treat a 404 from the ping, not this status, as the row-is-gone
+   * signal.
+   */
   DEAD("DEAD"),
   /**
    * Wire value {@code RESURRECTED} -- a new ping arrived after a death event was already

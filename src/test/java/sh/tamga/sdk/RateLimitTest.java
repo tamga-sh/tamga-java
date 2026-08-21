@@ -146,9 +146,9 @@ class RateLimitTest {
   @Test
   void heartbeatWritesAreRetryableInTheirOwnRight() {
     // Both are bare `SET last_heartbeat_at = NOW()` updates -- repeating one cannot burn a seat.
-    // Dropping a throttled heartbeat is what is actually dangerous: the machine goes on to be
-    // culled, and the rate limiter buckets per route pattern, so a whole fleet 429s itself on
-    // exactly this path.
+    // Dropping a throttled heartbeat is what is actually dangerous: the machine goes on to read
+    // DEAD (stale, not culled -- see HeartbeatScheduler), and the rate limiter buckets per route
+    // pattern, so a whole fleet 429s itself on exactly this path.
     assertThat(Transport.isRetryable("POST", "/machines/m-1/actions/ping-heartbeat")).isTrue();
     assertThat(Transport.isRetryable("POST", "/machines/m-1/actions/reset-heartbeat")).isTrue();
   }

@@ -184,7 +184,8 @@ source doc for the full set, including analytics/EE items that don't touch this 
   true, which is why they are listed in their own right rather than folded in. Both are bare
   `SET last_heartbeat_at = NOW()` writes with no seat-burning risk, and the rate limiter buckets
   per **route pattern**, so an entire fleet shares one budget on that path: a dropped 429 there
-  gets the machine culled. `RateLimitTest` now pins the opposite of what it used to.
+  leaves the machine reading `DEAD` until some later ping lands (a staleness report, not a cull —
+  see the `DEAD` bullet below). `RateLimitTest` now pins the opposite of what it used to.
   Implemented in `Transport`: see `isRetryable`, `parseRetryAfterSeconds` and `retryDelayMillis`,
   and `RateLimitTest` for the regressions that pin the policy — in particular that `POST
   /machines` makes exactly one call.
@@ -262,6 +263,20 @@ source doc for the full set, including analytics/EE items that don't touch this 
   interval from these hardcoded constants, not from a policy value the server ignores.
   `HeartbeatScheduler.WINDOW`/`ProcessHeartbeatScheduler.WINDOW` encode them, with the default
   interval at a third of the window so two consecutive failed pings are survivable.
+- **`HEARTBEAT_STATUS == DEAD` is a staleness report, not a tombstone.** The earlier directive
+  ("DEAD means the row was culled, so re-activate instead of pinging") was false and is reversed.
+  `Machine::heartbeat_status*` derives the value from `last_heartbeat_at` against the window and
+  never reads `policy.require_heartbeat`; that column defaults to `FALSE`, and the cull job
+  early-returns on a policy that leaves it there (its claim query requires `AND p.require_heartbeat`
+  as well). **On a default policy nothing is ever culled**, so a machine reports `DEAD` forever with
+  its row and its seat still present. A ping to a `DEAD` machine also succeeds and revives it — the
+  write is a bare `SET last_heartbeat_at = NOW()` with no resurrection check, so
+  `heartbeat_resurrection_strategy` bounds the cull job and not the ping endpoint. Consequences for
+  every SDK here: a heartbeat scheduler must **keep pinging through `DEAD`** and must never stop,
+  return or short-circuit its loop on one (tamga-python shipped exactly that bug); the only
+  row-is-gone signal is a **404 from the ping itself**, which is where re-activation belongs.
+  `HeartbeatScheduler` never gates a tick on the previous outcome, and
+  `HeartbeatSchedulerTest.schedulerKeepsPingingAcrossConsecutiveDeadReadings` pins that.
 - **Both checkout formats derive their AES key with HKDF-SHA256** (`crypto.Hkdf`), with different,
   non-interchangeable parameters: license files use salt `tamga:license-file-key-v1` / `info`
   `license-file` (`Hkdf.deriveLicenseFileKey`); machine files use salt

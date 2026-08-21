@@ -88,7 +88,8 @@ public final class Transport {
    * <p>Matching is by suffix, not substring, so each heartbeat action is listed in its own right.
    * {@code /actions/ping-heartbeat} does not end with {@code /actions/ping} -- that suffix only
    * matches a process ping -- and leaving it out meant a throttled heartbeat was dropped silently
-   * and the machine went on to be culled. Both heartbeat writes are bare
+   * and the machine went on to read {@code DEAD} (which is a staleness report, not a cull -- see
+   * {@link HeartbeatScheduler}). Both heartbeat writes are bare
    * {@code SET last_heartbeat_at = NOW()} updates: repeating one cannot burn a seat or double
    * anything, and the rate limiter buckets per route pattern, so a whole fleet shares one budget
    * on exactly these paths and 429s them for each other.

@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -18,7 +21,7 @@ import org.junit.jupiter.api.Test;
 import sh.tamga.sdk.model.HeartbeatStatus;
 import sh.tamga.sdk.model.Machine;
 
-/** Heartbeat scheduling, including the dead-machine signal callers depend on. */
+/** Heartbeat scheduling, including the stale-heartbeat signal callers depend on. */
 class HeartbeatSchedulerTest {
 
   private MockWebServer server;
@@ -80,8 +83,67 @@ class HeartbeatSchedulerTest {
         .build()
         .tick();
 
-    // DEAD means the row was culled server-side: the caller must re-activate, not keep pinging.
+    // DEAD only reports that the last ping was older than the window -- it says nothing about
+    // whether the row still exists, and the ping that observed it has already revived it. The
+    // callback is the only place a caller can see the staleness at all, so it must not be hidden.
     assertThat(seen.get()).isEqualTo(HeartbeatStatus.DEAD);
+  }
+
+  @Test
+  void deadReadingIsNotAnErrorAndStillCarriesTheMachine() {
+    // The row-is-gone signal is a 404 from the ping, not a DEAD reading: a DEAD ping is a normal
+    // 200 carrying a machine, so `error` stays null and re-activation must not fire.
+    enqueueMachine("DEAD");
+    AtomicReference<Machine> machineSeen = new AtomicReference<>();
+    AtomicReference<Throwable> errorSeen = new AtomicReference<>();
+
+    HeartbeatScheduler.builder(client, "mach-1")
+        .onTick((machine, error) -> {
+          machineSeen.set(machine);
+          errorSeen.set(error);
+        })
+        .build()
+        .tick();
+
+    assertThat(machineSeen.get()).isNotNull();
+    assertThat(machineSeen.get().heartbeatStatus()).isEqualTo(HeartbeatStatus.DEAD);
+    assertThat(errorSeen.get()).isNull();
+  }
+
+  @Test
+  void schedulerKeepsPingingAcrossConsecutiveDeadReadings() throws Exception {
+    // Regression: DEAD is a staleness report, not a tombstone. `require_heartbeat` defaults to
+    // FALSE and the server's cull job early-returns without it, so on a default policy the row is
+    // never culled and reports DEAD indefinitely -- while every ping still succeeds and revives
+    // it. A loop that stops, returns or short-circuits on a DEAD reading therefore strands a
+    // machine that was one ping away from being ALIVE again; tamga-python shipped exactly that
+    // bug. Three DEAD readings in a row must not perturb the timer at all, and the fourth ping
+    // must land and come back ALIVE.
+    for (int i = 0; i < 3; i++) {
+      enqueueMachine("DEAD");
+    }
+    for (int i = 0; i < 20; i++) {
+      enqueueMachine("ALIVE");
+    }
+    List<HeartbeatStatus> seen = Collections.synchronizedList(new ArrayList<>());
+    CountDownLatch fourTicks = new CountDownLatch(4);
+
+    HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, "mach-1")
+        .interval(Duration.ofMillis(40))
+        .onTick((machine, error) -> {
+          seen.add(machine == null ? null : machine.heartbeatStatus());
+          fourTicks.countDown();
+        })
+        .build();
+    scheduler.start();
+
+    assertThat(fourTicks.await(10, TimeUnit.SECONDS)).isTrue();
+    assertThat(scheduler.running()).isTrue();
+    scheduler.stop();
+
+    assertThat(seen.subList(0, 4)).containsExactly(HeartbeatStatus.DEAD, HeartbeatStatus.DEAD,
+        HeartbeatStatus.DEAD, HeartbeatStatus.ALIVE);
+    assertThat(server.getRequestCount()).isGreaterThanOrEqualTo(4);
   }
 
   @Test

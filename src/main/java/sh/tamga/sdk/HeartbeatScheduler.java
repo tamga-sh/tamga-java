@@ -14,12 +14,19 @@ import sh.tamga.sdk.model.Machine;
  *
  * <p>The server's heartbeat window is a <b>hardcoded 600 seconds</b>, not driven by the policy's
  * {@code heartbeat_duration} despite that field existing. {@link #DEFAULT_INTERVAL} is a third of
- * the window, which tolerates two consecutive failed pings before the machine goes dead.
+ * the window, which tolerates two consecutive failed pings before the machine starts reporting
+ * {@link HeartbeatStatus#DEAD}.
  *
  * <pre>{@code
  * HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, machineId)
  *     .onTick((machine, error) -> {
+ *       // DEAD is a staleness report, not a tombstone. This very ping already revived the
+ *       // machine, so log it and let the scheduler carry on -- never stop or re-activate here.
  *       if (machine != null && machine.heartbeatStatus() == HeartbeatStatus.DEAD) {
+ *         logStaleHeartbeat();
+ *       }
+ *       // A 404 is the only signal that the row is actually gone. Re-activate off that.
+ *       if (error instanceof TamgaApiException.NotFoundException) {
  *         reactivate();
  *       }
  *     })
@@ -27,10 +34,22 @@ import sh.tamga.sdk.model.Machine;
  * scheduler.start();
  * }</pre>
  *
- * <p><b>Handle the tick callback.</b> It is the only way to observe the machine going
- * {@link HeartbeatStatus#DEAD}, which means the row was culled server-side and the correct response
- * is to re-activate, not to keep pinging. Errors are reported rather than swallowed for the same
- * reason.
+ * <p><b>{@link HeartbeatStatus#DEAD} does not mean the machine was culled.</b> It means only that
+ * the last ping is older than the window. The server computes {@code heartbeat_status} from
+ * {@code last_heartbeat_at} against that window and never consults the policy's
+ * {@code require_heartbeat}, which defaults to {@code false} -- and the cull job early-returns
+ * unless that flag is set. On a default policy nothing is ever culled, so a machine can report
+ * {@code DEAD} indefinitely while its row and its seat are both still there. Pinging a
+ * {@code DEAD} machine also succeeds and revives it: the write is a bare
+ * {@code SET last_heartbeat_at = NOW()} with no resurrection check. So <b>keep pinging through
+ * {@code DEAD}</b> -- this scheduler does, and stopping is what would actually lose the machine.
+ *
+ * <p><b>A 404 from the ping is the row-is-gone signal.</b> That, not {@code DEAD}, is what
+ * re-activation belongs on. It arrives in the callback's {@code error} argument as a
+ * {@link sh.tamga.sdk.error.TamgaApiException.NotFoundException}.
+ *
+ * <p><b>Handle the tick callback.</b> It is the only way to observe either signal, which is why
+ * failures are reported rather than swallowed.
  *
  * <p>This class is {@link AutoCloseable}, so a try-with-resources block stops it reliably.
  */
@@ -123,7 +142,14 @@ public final class HeartbeatScheduler implements AutoCloseable {
     }
   }
 
-  /** Sends one ping and reports the outcome. Package-private so tests can drive it directly. */
+  /**
+   * Sends one ping and reports the outcome. Package-private so tests can drive it directly.
+   *
+   * <p>The outcome never gates the next tick. A {@link HeartbeatStatus#DEAD} reading in particular
+   * is not a stop condition -- it only says the previous ping was older than the window, and the
+   * ping that observed it has already revived the machine. Short-circuiting the loop on
+   * {@code DEAD} would strand a machine whose row is still very much alive.
+   */
   void tick() {
     Machine machine = null;
     Throwable failure = null;

@@ -71,6 +71,7 @@ machine is deleted before the exception is thrown, so no seat is left consumed e
 
 ```java
 import sh.tamga.sdk.HeartbeatScheduler;
+import sh.tamga.sdk.error.TamgaApiException;
 import sh.tamga.sdk.error.TamgaMachineOverLimitException;
 import sh.tamga.sdk.model.ActivationResult;
 import sh.tamga.sdk.model.CreateMachineOptions;
@@ -82,8 +83,13 @@ try {
 
   HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, activation.machine().id())
       .onTick((machine, error) -> {
-        // DEAD means the row was culled server-side: re-activate rather than keep pinging.
+        // DEAD only means the last ping was older than the window. The row and its seat are
+        // still there, and this ping just revived the machine -- so keep pinging through it.
         if (machine != null && machine.heartbeatStatus() == HeartbeatStatus.DEAD) {
+          logStaleHeartbeat();
+        }
+        // A 404 from the ping is the only signal the row is really gone. Re-activate off that.
+        if (error instanceof TamgaApiException.NotFoundException) {
           reactivate();
         }
       })
@@ -344,6 +350,14 @@ boundaries, not oversights.
   simply does not apply the constraint.
 - **The heartbeat window is a hardcoded 600s**, not driven by `policy.heartbeat_duration` despite
   that field existing. `HeartbeatScheduler` derives its interval from the real 600s.
+- **`HeartbeatStatus.DEAD` does not mean the machine was culled.** It means only that the last ping
+  is older than the window. The server computes it from `last_heartbeat_at` alone and never
+  consults `policy.require_heartbeat`, which defaults to `false` and is exactly what the cull job
+  requires before it removes anything — so on a default policy nothing is ever culled and a machine
+  reports `DEAD` indefinitely with its row and its seat still in place. Pinging a `DEAD` machine
+  succeeds and revives it (the write is a bare `SET last_heartbeat_at = NOW()` with no resurrection
+  check), so a scheduler must keep pinging through `DEAD`. The row-is-gone signal is a **404 from
+  the ping itself** (`TamgaApiException.NotFoundException`) — hang re-activation off that.
 - **The entitlements listing does not paginate at all.** It is a union of directly attached and
   policy-inherited rows, which one keyset cursor cannot describe, so the server accepts
   `page[after]` and never reads it. `listEntitlements` does not send it and always reports a null
