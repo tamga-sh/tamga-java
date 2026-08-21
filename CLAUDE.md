@@ -15,10 +15,10 @@ documentation.
 
 **Current state: complete.** `crypto/` (Ed25519, AES-256-GCM, HKDF-SHA256, ECDSA-P256, RSA
 PKCS1/PSS), `checkout/` (`LicenseFile`, `MachineFile`), `proof/` (`OfflineProof` +
-`CanonicalJson`), and the HTTP surface (`TamgaClient`'s 20 endpoint methods, `Transport`,
+`CanonicalJson`), and the HTTP surface (`TamgaClient`'s 31 endpoint methods, `Transport`,
 `AuthTransport`'s seven forms, the JSON:API error model, the entitlement cache, both heartbeat
-schedulers, and the full `Policy`/`ValidationCode` types) are all implemented and tested — 235
-tests, ~90% instruction coverage against an 80% gate.
+schedulers, and the full `Policy`/`ValidationCode` types) are all implemented and tested — 478
+tests, ~97.7% instruction coverage against an 80% gate.
 
 The normative description of the network surface is
 `../docs/api-client-contract.md`, derived from `tamga-go`. Behavioural changes to
@@ -133,7 +133,7 @@ no-op or advertise a guarantee the server doesn't enforce. Only the gaps relevan
 scope (license validation, checkout, machine management, offline proof) are listed — see the
 source doc for the full set, including analytics/EE items that don't touch this SDK at all.
 
-- **The upgrade-check endpoint works now.** The previous directive here — "`GET
+- **The upgrade-check endpoint works now, and is implemented** as `checkForUpgrade`. The previous directive here — "`GET
   /releases/actions/upgrade` crashes at runtime and there is no download route" — was verified
   false against the server and is deleted; it was forbidding work that is buildable. The route is
   live, public (`OptionalAuth`), and enforces the product's distribution strategy. Real
@@ -263,7 +263,7 @@ source doc for the full set, including analytics/EE items that don't touch this 
   (`COALESCE(p.heartbeat_duration, 600)`). An earlier note here claimed the window was a hardcoded
   600s regardless of the policy — that was false and is reversed. The **process** window is
   genuinely hardcoded, at a fixed `INTERVAL '30 seconds'` with no resurrection grace period.
-- **But this SDK's default ping interval still assumes the 600s fallback.**
+- **The default ping interval still assumes the 600s fallback, but no longer has to.**
   `HeartbeatScheduler.DEFAULT_INTERVAL` is a third of `WINDOW` (600s), so on a policy with a
   shorter `heartbeat_duration` the default ping rate is too slow and the machine goes `DEAD`
   between pings. Callers on such a policy must set the interval themselves. This SDK exposes no
@@ -272,8 +272,60 @@ source doc for the full set, including analytics/EE items that don't touch this 
   the machine row: `check-out` and `generate-offline-proof` resolve the machine through a
   policy-joined read and carry the true value (so `nextHeartbeatAt - lastHeartbeatAt` recovers the
   window there), while activate/create, `ping-heartbeat` and `reset-heartbeat` are bare writes with
-  no join and always report the 600s fallback. Filed upstream as `tamga-api-internal#7`. Making the
-  scheduler policy-aware still needs a policy read this SDK does not yet have.
+  no join and always report the 600s fallback, as does `PATCH /machines/{id}`. Filed upstream as
+  `tamga-api-internal#7`. The policy read now exists: `getLicensePolicy(licenseId)` returns the
+  `Policy`, `Policy.effectiveHeartbeatWindow()` applies the same `heartbeat_duration`-else-600 rule
+  the server does, and `HeartbeatScheduler.Builder.policy(...)` sizes the interval at a third of it.
+  Use `getLicensePolicy`, **not** `getPolicy`: `policy.read` is absent from the `LicenseToken`
+  permission set (`authz/mod.rs:236-261`), so the standalone policy route answers `403` under
+  license-key auth while the nested one, gated on `license.read`, works. `DEFAULT_INTERVAL` is
+  unchanged, so a caller who sets neither still gets the old behaviour.
+- **The ping interval is floored at one second, fleet-wide.**
+  `HeartbeatScheduler.MINIMUM_INTERVAL` is applied by `Builder.interval(...)`,
+  `intervalForWindow(...)` and `ProcessHeartbeatScheduler.Builder.interval(...)`, which share the
+  one constant rather than declaring their own. **The rule, so no reader has to run it: a positive
+  value below 1s becomes 1s; `500ms` becomes `1s`; `45s` stays `45s`; null, zero and negative keep
+  falling back to `DEFAULT_INTERVAL`, because they mean "unspecified" and not "as fast as
+  possible". Nothing throws.** ⚠️ Do **not** "improve" this into a narrower guard on only the
+  periods `scheduleAtFixedRate` refuses — that was the previous rule and it was replaced on
+  measurement. Measured on this repo's Temurin 17 toolchain: period `0` and `-1` throw
+  `IllegalArgumentException`, and period `1` is honoured **exactly**, at ~1000 ticks/sec. A guard
+  drawn around what the executor rejects therefore clamps `0` and passes `1`, giving opposite
+  treatment to two inputs with identical observable behaviour — a provenance property, not a
+  safety one. The old guard also failed on its own terms: `Duration.ofNanos(500_000)` is neither
+  zero nor negative, so it passed, and then `toMillis()` truncated it to `0` and `start()` threw
+  the very exception the guard existed to prevent.
+- **Liveness is judged on *truncated whole seconds*, and that is what settles whether the floor is
+  safe on a short window.** `heartbeat_status_within`
+  (`tamga-api/src/features/machines/model.rs:124-129`) computes
+  `let age_secs = (Utc::now() - hb_ts).num_seconds(); let within_window = age_secs <= window_secs;`
+  and chrono's `num_seconds()` truncates — `Duration::milliseconds(1999).num_seconds() == 1`. So a
+  machine reads `DEAD` only once its age reaches **`window_secs + 1`** seconds; every window
+  carries one free second. ⚠️ Do **not** restate this as "DEAD when age exceeds the window" — that
+  pessimistic reading makes a 1s window look unserveable at a 1s ping when it has 2s of slack, and
+  it was the basis of a window-aware-floor proposal that was investigated and rejected. What the
+  floor genuinely costs is the `/3` divisor's "two consecutive losses": `heartbeat_duration` 3 is
+  the first window where floor and divisor agree, 2 keeps one spare ping, 1 keeps none, and steady
+  state holds all three. The single window the floor cannot hold is **`0`**, not `1` — its entire
+  grace *is* that free second. The SDK deliberately does not chase it with a sub-second ping,
+  which would tie the request rate to a truncation artifact rather than a protocol guarantee; a
+  negative window is unserveable at any rate. Pinned window by window in `SchedulerWindowTest`,
+  whose window-`0` test carries the standing caveat: if the server ever compares sub-second,
+  window `0` becomes unserveable at any rate and window `1` becomes the genuine boundary case it
+  is already mistaken for.
+- **Deriving an interval from a policy defaults a non-positive window *before* dividing** — that is
+  what `intervalForWindow`'s first branch is, and it must stay. `intervalForWindow(0)` is
+  `intervalForWindow(WINDOW)` is `DEFAULT_INTERVAL`, so a stored `heartbeat_duration` of `0` gives
+  a 200s ping rather than a 1s one. ⚠️ Do **not** "simplify" this into dividing the raw window and
+  letting `MINIMUM_INTERVAL` catch the result: both reach the same verdict — the window is
+  unserveable at any rate, since `effective_window_secs()` is
+  `.map(i64::from).unwrap_or(HEARTBEAT_WINDOW_SECS)` and so replaces `None` only, meaning a stored
+  `0` really is judged as a zero-length window — but they differ by **200x** in what failing
+  costs: 18 requests an hour against 3600, from every machine that policy licenses, forever, to
+  achieve nothing. That is the same self-inflicted denial of service this floor exists to prevent,
+  reached from the other side. tamga-go and tamga-python derive it this way too; tamga-js floors to
+  a 1000ms ping here, and that is the fleet divergence. The floor still governs a *caller-supplied*
+  interval unchanged, which is the case where no window is known and 1s is the right bound.
 - **A heartbeat scheduler must never stop on a status — any status.** The only row-is-gone signal
   is a **404 from the ping itself**, which is where re-activation belongs. A stale machine is
   always one successful ping away from `ALIVE`: the ping write is a bare
@@ -303,8 +355,9 @@ source doc for the full set, including analytics/EE items that don't touch this 
   the real window and can be `DEAD`: reachable here as `MachineFile.verifyAndDecrypt` (from
   `checkOutMachine`) and `OfflineProofResult.machine()`. Note the fleet-wide M42 note lists only
   ping/reset/create/validate and concludes `DEAD` is unobservable — that holds for those four
-  routes and for SDKs without checkout, but **not** for tamga-java. A dedicated machine read
-  (`GET /machines/{id}`) would also show it; this SDK does not expose one yet (M11/M36).
+  routes and for SDKs without checkout, but **not** for tamga-java. `getMachine` and `listMachines`
+  now show it directly, which is what makes a `case DEAD` branch in caller code reachable rather
+  than dead.
 - **Both checkout formats derive their AES key with HKDF-SHA256** (`crypto.Hkdf`), with different,
   non-interchangeable parameters: license files use salt `tamga:license-file-key-v1` / `info`
   `license-file` (`Hkdf.deriveLicenseFileKey`); machine files use salt
@@ -321,14 +374,134 @@ source doc for the full set, including analytics/EE items that don't touch this 
   decoded bytes.** This is the single most common implementation bug across every Tamga SDK. See
   the `CRITICAL:` note in `checkout/LicenseFile.java`'s Javadoc and the call site in `verify`, and
   `LicenseFileTest`'s dedicated regression signing the decoded bytes to confirm it fails.
+- **Offline machine files must be format v2 as well, and they DO carry signed claims.** Earlier
+  revisions of this file and of the SDK stated the opposite; both were wrong, and the consequence
+  was that a checked-out machine verified forever. `alg` is `<encoding>+<signing-suffix>+v2`
+  (`base64`/`aes-256-gcm` × `ed25519`/`ecdsa-p256`/`rsa-sha256`/`rsa-pss-sha256`), parsed
+  structurally by `checkout/MachineFileAlg` — split the encoding at the FIRST `+` and the version
+  at the LAST, because both halves contain hyphens. A substring `contains()` test is not a parse:
+  it accepts `base64+ed25519+v3` and `xbase64+ed25519+v2junk` too, which is how this SDK "passed"
+  the v2 gate without ever checking for it. The signed payload carries the same
+  `meta` claims a `.lic` file does and `MachineFile.verifyWithClaims` enforces `exp` with the SAME
+  constant, `LicenseFile.CLOCK_SKEW_TOLERANCE_SECONDS` — never define a second one — raising the
+  same `LicenseFileExpiredException`. A TTL-less checkout legitimately has no `exp`.
+- **An encrypted `.machine` file's `enc` is `"<nonce_b64>.<ciphertext_b64>"` — two independently
+  base64-encoded halves.** An encrypted `.lic` file's is a single `base64(nonce‖ciphertext‖tag)`
+  blob. Same PEM envelope, same `{enc, sig, alg}` shape, same `aes-256-gcm+…+v2` prefix, genuinely
+  different framing: the server builds them through different functions. The doc comment on
+  `machine_file.rs`'s own encoder still describes the single-blob form and is stale, which is what
+  led all eight SDKs in this fleet to implement it that way. Branch on the encoding prefix from
+  `alg`, never on whether a dot happens to be present, and never decode any of it before the
+  signature over the whole `enc` STRING has verified.
+- **`Base64Codec`'s use of the STRICT decoder is load-bearing — do not "helpfully" relax it.**
+  Reading the dot-separated `enc` as one blob is wrong everywhere, but whether it *fails* depends
+  entirely on the decoder. A 12-byte nonce always encodes to exactly 16 unpadded base64 characters,
+  so `nonce_b64 + cipher_b64` is always a multiple of 4 and a decoder that ignores out-of-alphabet
+  characters silently drops the `.` and reconstructs `nonce‖ciphertext‖tag` byte-for-byte — the old
+  12-byte slice then lands correctly by accident. Measured on all four encrypted fixtures: 16 + 896
+  = 912 chars, and a lenient decode reproduces the exact plaintext every time. That is why the
+  sibling CPython and Node SDKs appeared to work. Java is only where the bug was *visible*, because
+  `java.util.Base64.getDecoder()` rejects the `.`. Switching any of this to `getMimeDecoder()` would
+  re-hide it and quietly soften the nonce/ciphertext guards; `MachineFileTest` pins the strict
+  behaviour for exactly that reason.
+- **Public-key encodings differ per algorithm and per server endpoint — and ECDSA is never SPKI.**
+  `accounts.ecdsa_public_key` holds `ecdsa_pair.public_key().as_ref()`, a raw 65-byte SEC1
+  uncompressed point, so an SPKI-only ECDSA verifier cannot consume a real account key at all —
+  that one was a genuine defect here. RSA is subtler and is NOT a defect: `accounts.public_key`
+  holds `as_der()`, i.e. real SPKI (294 bytes), which this SDK already parsed, while
+  `license_signing.rs`'s `extract_public_key` returns PKCS#1 `RSAPublicKey` (270 bytes) — the form
+  the machine-file fixtures carry, and the form the server's own `verify` helper expects. Both are
+  legitimate distribution paths, so `Ecdsa`/`Rsa` accept both encodings per algorithm rather than
+  guessing which endpoint a caller used. The P-256 curve pin, the on-curve check and the
+  exact-2048-bit modulus check apply on every path.
+  Upstream note: the server test `rsa_public_key_is_spki_der` asserts only `len > 256`, which both
+  270-byte PKCS#1 and 294-byte SPKI satisfy — so it passes while asserting the opposite of what its
+  name claims, and cannot catch this discrepancy.
 - **`RSA_2048_JWT_RS256` is rejected for machine files.** `MachineFile.verify` throws
-  `TamgaCheckoutException.SchemeNotSupportedException` before attempting any verification for this
-  scheme, matching the server's `422 SCHEME_NOT_SUPPORTED` — no JWT verification path exists or
-  should be added.
+  `TamgaCheckoutException.SchemeNotSupportedException` before attempting any verification — and
+  before `alg` is even parsed — matching the server's `422 SCHEME_NOT_SUPPORTED`. No JWT
+  verification path exists or should be added. The server emits the identical `rsa-sha256` suffix
+  for this scheme and for `RSA_2048_PKCS1_SIGN`, so `alg` cannot identify the scheme even in
+  principle; the caller's `LicenseScheme` is authoritative and `alg` is only ever a cross-check.
+- **Machine-file tests must use server-produced fixtures.** `src/test/resources/machine-file-fixtures/`
+  holds 12 files (4 schemes × plain/encrypted/expired) emitted by the server's own
+  `encode_machine_file`, driven by `manifest.json` through `support/MachineFixtures` and
+  `MachineFileFixtureTest`'s `@ParameterizedTest` — iterate the manifest, never hardcode names.
+  Do not regenerate them from this repo: a self-encoded fixture reproduces whatever this repo
+  believes the format to be, which is exactly how the three bugs above survived. `CheckoutFixture`
+  remains fine for wiring/edge cases but is not evidence about the wire format. Note the valid
+  fixtures carry a real one-hour `ttl`, so never let the wall clock reach `verifyWithClaims` for
+  one — pass a timestamp derived from the file's own `exp`.
 - **Offline-proof field order is load-bearing.** The RSA signature in `proof/OfflineProof.java`
   covers a specific server-produced key order, recursively alphabetical at every nesting level
   (matching `serde_json`'s `BTreeMap`-backed output) — NOT literal source/insertion order. See
   `OfflineProof.java`'s `CRITICAL:` note and `model/CanonicalJson.java`.
+- **`check_in_interval`'s wire values are adverbs, not nouns.** The server's accepted set is
+  `["daily", "weekly", "monthly", "yearly"]` (`policies/enums.rs:27`), pinned by the identical list
+  in the `policies` table's `CHECK` constraint and by the server's own
+  `enum_lists_match_the_database` test. This SDK mapped `Policy.CheckInInterval` to
+  `day`/`week`/`month`/`year`, so **every real policy decoded to `null`** — invisible until the
+  policy read endpoints landed and something finally saw the field on the wire. The fleet contract
+  document says lowercase nouns too and is wrong on the same point. `fromWireValue` accepts both
+  spellings; `wireValue()` returns the adverb.
+- **`listMachines` pages by OFFSET, and it is the only listing here that does.** It takes
+  `page[number]`/`page[size]` (aliases `page`/`limit`), default size 25, clamped to 100, and
+  answers a real `meta.page`. `listComponents` and `listMachineProcesses` are keyset (`limit` +
+  `page[after]`, no metadata, cursor synthesized from a full page), and `listEntitlements` is
+  neither. Hence `OffsetPage` alongside `Page` — do not merge them. **The `meta.page` keys mix
+  casings**: `number`, `size` and `total` are bare, `total_pages` is renamed to `totalPages`
+  (`shared/list_query.rs`), so a decoder assuming one convention reads three fields and silently
+  misses the fourth.
+- **There is no fingerprint filter on the machine collection.** The accepted filters are
+  `filter[license]`, `filter[owner]`, `filter[group]`, `filter[platform]` and the free-text
+  `filter[q]` — and `filter[q]` is a case-insensitive `ILIKE %term%` across `m.name`,
+  `m.hostname` **and** `m.fingerprint`. So it narrows, it does not identify:
+  `findMachineByFingerprint` sends it and then compares `fingerprint` exactly on the rows that
+  return. A machine that merely *contains* the fingerprint in its hostname is not the machine.
+- **`getPolicy` is always 403 for a license key; `getLicensePolicy` is not.** `policy.read` is
+  absent from the `LicenseToken` permission set (`authz/mod.rs:236-261`), and
+  `GET /policies/{id}` requires it. `GET /licenses/{id}/policy` is gated on `license.read`
+  instead, which the license token does hold. Both are exposed, and the Javadoc on each points at
+  the other; anything running under a license key wants the nested one.
+- **`PATCH /machines/{id}` is the counterexample to the write-vs-read rule.** The durable form of
+  the `DEAD` rule is "a response built off a write it just performed cannot say `DEAD`" — this
+  route is a write that can, because its `UPDATE ... RETURNING` sets none of the heartbeat columns,
+  so the status is judged against a clock it did not reset. The same `UPDATE` does not join
+  `policies`, so its `next_heartbeat_at` is the 600s fallback. A machine from this route is
+  therefore unusable for sizing a heartbeat interval, and `case DEAD` against it is reachable.
+- **Machine and license reads are not confined to the caller's own license.** No machine route
+  applies `require_license_scope`, and neither does `GET /licenses/{id}`, which additionally
+  returns `attributes.key` in plain text. A credential with `license.read`/`machine.read` can
+  therefore read every license and machine in the account. Reported upstream; no client can close
+  it. **Do not describe `getLicense`/`getMachine` as scoped** — the Javadoc on both says so
+  explicitly for that reason.
+- **The release resource is camelCase, alone in this API.** `ReleaseAttributes` carries
+  `#[serde(rename_all = "camelCase")]`, which no other serializer does, so the owning product
+  arrives as `productId`, not `product_id`. Reading the house style yields `null` and nothing else
+  complains. The two timestamps are renamed individually on top of that and stay
+  `created`/`updated`. `EndpointModelsTest` pins both halves.
+- **`GET /v1/health` is not under the account prefix and is not JSON:API.** It answers a flat
+  `{status, version, uptime_secs}`, so it must not go through the envelope decoder. Reaching it at
+  all needed `Transport` to be able to build a URL without `/v1/accounts/{accountId}` — that
+  unconditional prefix, not the server, is why no SDK in this fleet could call it. Diagnostic
+  value: it is exempt from both the auth gate and the host-header check, so if every other call is
+  answering `403` "The Host header does not match any configured host" and this one succeeds, the
+  fault is `TAMGA_ALLOWED_HOSTS`, not the credential. The converse does not hold.
+- **Nothing reaps process rows, so `deleteProcess` is not optional.** The server's reaper for
+  expired processes is dead code, so a row created by `createProcess` outlives the process it
+  describes and keeps counting against `TOO_MANY_PROCESSES`. An application that registers a
+  process per run and never deletes one accumulates rows until activation fails on a limit no
+  running process is using. `ProcessHeartbeatScheduler.dispose()` pairs stop-and-delete;
+  `close()` deliberately does not delete, because it runs implicitly at the end of a
+  try-with-resources block and a scoped block must not silently destroy server state.
+- **`Component` and `Process` responses ARE JSON:API-enveloped** — `{"data":{"type","id",
+  "attributes":{…}}}` — even though their *request* bodies are flat. tamga-dotnet deserialized
+  those bodies straight into its model and returned empty ids and fingerprints on every call, with
+  its own fixtures encoding the wrong shape so CI stayed green. This SDK decodes them through
+  `Component.fromResourceNode`/`Process.fromResourceNode`, which read `id` off the resource and
+  the rest off `attributes`, and its fixtures carry the enveloped shape and assert real values —
+  so a regression to flat decoding fails the tests rather than passing quietly. Verified, not
+  assumed; do not "simplify" either decode path.
 
 ## Testing
 

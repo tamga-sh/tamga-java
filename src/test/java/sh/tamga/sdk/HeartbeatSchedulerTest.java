@@ -153,8 +153,12 @@ class HeartbeatSchedulerTest {
     List<HeartbeatStatus> seen = Collections.synchronizedList(new ArrayList<>());
     CountDownLatch fourTicks = new CountDownLatch(4);
 
+    // MINIMUM_INTERVAL, not a faster number: the one-second floor means no interval a test can
+    // ask for ticks quicker than this, so four ticks is four seconds of real time. Stating the
+    // constant keeps the test honest about why it takes that long -- a literal 40ms here would
+    // silently be clamped to the same second and read as a mystery.
     HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, "mach-1")
-        .interval(Duration.ofMillis(40))
+        .interval(HeartbeatScheduler.MINIMUM_INTERVAL)
         .onTick((machine, error) -> {
           seen.add(machine == null ? null : machine.heartbeatStatus());
           fourTicks.countDown();
@@ -162,7 +166,7 @@ class HeartbeatSchedulerTest {
         .build();
     scheduler.start();
 
-    assertThat(fourTicks.await(10, TimeUnit.SECONDS)).isTrue();
+    assertThat(fourTicks.await(30, TimeUnit.SECONDS)).isTrue();
     assertThat(scheduler.running()).isTrue();
     scheduler.stop();
 
@@ -224,13 +228,13 @@ class HeartbeatSchedulerTest {
     CountDownLatch ticked = new CountDownLatch(2);
 
     HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, "mach-1")
-        .interval(Duration.ofMillis(40))
+        .interval(HeartbeatScheduler.MINIMUM_INTERVAL)
         .onTick((machine, error) -> ticked.countDown())
         .build();
     scheduler.start();
 
     assertThat(scheduler.running()).isTrue();
-    assertThat(ticked.await(10, TimeUnit.SECONDS)).isTrue();
+    assertThat(ticked.await(30, TimeUnit.SECONDS)).isTrue();
 
     scheduler.stop();
     assertThat(scheduler.running()).isFalse();
@@ -267,7 +271,7 @@ class HeartbeatSchedulerTest {
     }
     AtomicInteger ticks = new AtomicInteger();
     HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, "mach-1")
-        .interval(Duration.ofMillis(10))
+        .interval(HeartbeatScheduler.MINIMUM_INTERVAL)
         .onTick((machine, error) -> ticks.incrementAndGet())
         .build();
 
@@ -305,8 +309,14 @@ class HeartbeatSchedulerTest {
     // stop() interrupts the timer, but a tick already inside its HTTP call still completes and
     // still increments, so snapshotting the instant stop() returns could catch that straggler
     // landing during the sleep and fail on a drained scheduler that is behaving correctly.
+    //
+    // The observation window has to OUTLAST the interval, and since the one-second floor landed
+    // that is a second rather than the 10ms this test used to run at. A leaked timer's first tick
+    // is now a whole second away, so the old 150ms sleep would have watched a genuinely leaked
+    // scheduler sit silently and called it stopped -- the regression this test exists for would
+    // have walked straight through it. Sleeping past the floor is what keeps it a real check.
     int settled = awaitSettled(ticks);
-    Thread.sleep(150);
+    Thread.sleep(HeartbeatScheduler.MINIMUM_INTERVAL.toMillis() + 500);
     assertThat(ticks.get()).isEqualTo(settled);
   }
 
@@ -387,11 +397,11 @@ class HeartbeatSchedulerTest {
     CountDownLatch ticked = new CountDownLatch(2);
 
     try (ProcessHeartbeatScheduler scheduler = ProcessHeartbeatScheduler.builder(client, "proc-1")
-        .interval(Duration.ofMillis(40))
+        .interval(HeartbeatScheduler.MINIMUM_INTERVAL)
         .onTick((process, error) -> ticked.countDown())
         .build()) {
       scheduler.start();
-      assertThat(ticked.await(10, TimeUnit.SECONDS)).isTrue();
+      assertThat(ticked.await(30, TimeUnit.SECONDS)).isTrue();
     }
   }
 

@@ -16,6 +16,8 @@ import org.junit.jupiter.api.Test;
 
 class EcdsaTest {
 
+  private static final int UNCOMPRESSED_POINT_LENGTH = 65;
+
   private static KeyPair generateP256KeyPair() throws Exception {
     KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
     generator.initialize(new ECGenParameterSpec("secp256r1"));
@@ -113,8 +115,83 @@ class EcdsaTest {
     assertThat(Ecdsa.verify(mismatchedSpki, message, signature)).isFalse();
   }
 
+  /**
+   * The encoding the server actually distributes: {@code accounts.ecdsa_public_key} stores a raw
+   * 65-byte SEC1 uncompressed point, never SPKI. The fixture corpus covers this end to end; this
+   * pins the primitive itself so a future "simplify to SPKI only" refactor fails here rather than
+   * only in the machine-file suite.
+   */
+  @Test
+  void verifyReturnsTrueForRawSec1UncompressedPoint() throws Exception {
+    KeyPair keyPair = generateP256KeyPair();
+    byte[] message = "tamga machine file payload".getBytes(StandardCharsets.UTF_8);
+    byte[] signature = signP256(keyPair, message);
+
+    assertThat(Ecdsa.verify(rawPoint((ECPublicKey) keyPair.getPublic()), message, signature))
+        .isTrue();
+  }
+
+  /**
+   * A raw point carries no curve OID, so the curve comes from this class -- which means nothing in
+   * the encoding constrains the coordinates. A point that does not satisfy P-256's curve equation
+   * must be refused rather than handed to a provider that is not contractually required to check.
+   */
+  @Test
+  void verifyReturnsFalseForUncompressedPointThatIsNotOnTheCurve() throws Exception {
+    KeyPair keyPair = generateP256KeyPair();
+    byte[] message = "message".getBytes(StandardCharsets.UTF_8);
+    byte[] signature = signP256(keyPair, message);
+    byte[] offCurve = rawPoint((ECPublicKey) keyPair.getPublic());
+    // Flip a bit in Y: still a well-formed 65-byte uncompressed point, no longer a curve point.
+    offCurve[UNCOMPRESSED_POINT_LENGTH - 1] ^= 0x01;
+
+    assertThat(Ecdsa.verify(offCurve, message, signature)).isFalse();
+  }
+
+  /**
+   * The coordinate range check specifically -- a coordinate at or above the field prime is not a
+   * field element at all, and reducing it silently would accept a key the server can never emit.
+   */
+  @Test
+  void verifyReturnsFalseForUncompressedPointWithCoordinateOutsideTheField() throws Exception {
+    KeyPair keyPair = generateP256KeyPair();
+    byte[] message = "message".getBytes(StandardCharsets.UTF_8);
+    byte[] signature = signP256(keyPair, message);
+    byte[] outOfRangeX = rawPoint((ECPublicKey) keyPair.getPublic());
+    byte[] outOfRangeY = rawPoint((ECPublicKey) keyPair.getPublic());
+    for (int i = 1; i <= 32; i++) {
+      outOfRangeX[i] = (byte) 0xFF;
+      outOfRangeY[i + 32] = (byte) 0xFF;
+    }
+
+    assertThat(Ecdsa.verify(outOfRangeX, message, signature)).isFalse();
+    assertThat(Ecdsa.verify(outOfRangeY, message, signature)).isFalse();
+  }
+
+  /**
+   * 65 bytes alone does not make a raw point: without the {@code 0x04} uncompressed-point tag the
+   * bytes fall through to the SPKI parser, which rejects them. Nothing may guess.
+   */
+  @Test
+  void verifyReturnsFalseFor65ByteKeyWithoutTheUncompressedPointTag() throws Exception {
+    KeyPair keyPair = generateP256KeyPair();
+    byte[] message = "message".getBytes(StandardCharsets.UTF_8);
+    byte[] signature = signP256(keyPair, message);
+    byte[] untagged = rawPoint((ECPublicKey) keyPair.getPublic());
+    untagged[0] = 0x02;
+
+    assertThat(Ecdsa.verify(untagged, message, signature)).isFalse();
+  }
+
   // --- Hand-rolled DER/ASN.1 construction for the adversarial mismatched-OID SPKI. Not a
   // general-purpose ASN.1 encoder -- scoped to exactly this one test's needs. ---
+
+  /** {@code 0x04 || X(32) || Y(32)} -- SEC1 section 2.3.3 uncompressed point for P-256. */
+  private static byte[] rawPoint(ECPublicKey key) {
+    int fieldSizeBytes = (key.getParams().getCurve().getField().getFieldSize() + 7) / 8;
+    return concat(new byte[] {0x04}, toFixedLength(key.getW().getAffineX(), fieldSizeBytes),
+        toFixedLength(key.getW().getAffineY(), fieldSizeBytes));
+  }
 
   private static byte[] buildSpkiWithSecp256k1OidButP256Point(ECPublicKey p256Key) {
     int fieldSizeBytes = (p256Key.getParams().getCurve().getField().getFieldSize() + 7) / 8;

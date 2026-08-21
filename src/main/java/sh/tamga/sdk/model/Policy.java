@@ -1,6 +1,7 @@
 package sh.tamga.sdk.model;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.Map;
@@ -24,6 +25,17 @@ import java.util.Map;
  * {@link #effectiveOverageStrategy()} and {@link #effectiveResurrectionStrategy()}.
  */
 public final class Policy {
+
+  /**
+   * The machine heartbeat window the server falls back to when a policy leaves
+   * {@code heartbeat_duration} null.
+   *
+   * <p>Mirrors {@code Policy::effective_heartbeat_duration_secs}, which is
+   * {@code heartbeat_duration.unwrap_or(600)}, and the cull job's own
+   * {@code COALESCE(p.heartbeat_duration, 600)}. It is a fallback, never a ceiling: a policy that
+   * sets the column overrides it in both places.
+   */
+  public static final Duration DEFAULT_HEARTBEAT_WINDOW = Duration.ofSeconds(600);
 
   private final String id;
   private final String name;
@@ -159,6 +171,30 @@ public final class Policy {
    */
   public Integer heartbeatDuration() {
     return heartbeatDuration;
+  }
+
+  /**
+   * Returns the heartbeat window the server will actually measure this policy's machines against:
+   * {@link #heartbeatDuration()} when it is set, and {@link #DEFAULT_HEARTBEAT_WINDOW} when it is
+   * null.
+   *
+   * <p>This is the value to size a ping interval from -- feed it to
+   * {@code HeartbeatScheduler.Builder.window(Duration)}, or let
+   * {@code HeartbeatScheduler.Builder.policy(Policy)} do both steps. It is a straight mirror of
+   * the server's own fallback, so a client sizing off it reaches the same window the cull job
+   * uses.
+   *
+   * <p><b>Read the policy, not a ping response.</b> {@link Machine#nextHeartbeatAt()} carries the
+   * true window on some routes and the 600-second fallback on others, with no way for the client
+   * to tell which it is holding -- the route a scheduler naturally calls is one of the wrong ones.
+   *
+   * <p>A non-positive {@code heartbeat_duration} is returned as-is rather than corrected: the
+   * column is constrained to a positive integer or null server-side, so a zero or negative value
+   * would be an unmodelled server change, and quietly substituting 600 for it would hide that.
+   */
+  public Duration effectiveHeartbeatWindow() {
+    return heartbeatDuration == null
+        ? DEFAULT_HEARTBEAT_WINDOW : Duration.ofSeconds(heartbeatDuration);
   }
 
   /** Returns how many {@link #checkInInterval()} units make up one check-in period. */
@@ -431,30 +467,49 @@ public final class Policy {
   /**
    * The check-in cadence unit.
    *
-   * <p>Its wire values are <b>lowercase</b> ({@code day}/{@code week}/{@code month}/{@code year}),
-   * the single casing exception among the protocol's otherwise uppercase enums.
+   * <p>Its wire values are <b>lowercase adverbs</b> --
+   * {@code daily}/{@code weekly}/{@code monthly}/{@code yearly} -- the single casing exception
+   * among the protocol's otherwise {@code UPPER_SNAKE_CASE} enums.
+   *
+   * <p><b>They are not the bare nouns this SDK used to expect.</b> Until the policy read endpoints
+   * landed nothing in this repo had ever seen a real {@code check_in_interval} on the wire, and
+   * these constants were mapped to {@code day}/{@code week}/{@code month}/{@code year}. The
+   * server's accepted set is {@code ["daily", "weekly", "monthly", "yearly"]} in
+   * {@code policies/enums.rs}, pinned by the same list in the {@code policies} table's
+   * {@code CHECK} constraint, so the noun forms matched nothing: every real policy decoded to
+   * {@code null} here. {@link #fromWireValue} still accepts the noun spellings so a caller who
+   * stored one keeps parsing, but {@link #wireValue()} now returns the form the server actually
+   * uses.
    */
   public enum CheckInInterval {
-    /** Wire value {@code day}. */
-    DAY("day"),
-    /** Wire value {@code week}. */
-    WEEK("week"),
-    /** Wire value {@code month}. */
-    MONTH("month"),
-    /** Wire value {@code year}. */
-    YEAR("year");
+    /** Wire value {@code daily}. */
+    DAY("daily", "day"),
+    /** Wire value {@code weekly}. */
+    WEEK("weekly", "week"),
+    /** Wire value {@code monthly}. */
+    MONTH("monthly", "month"),
+    /** Wire value {@code yearly}. */
+    YEAR("yearly", "year");
 
     private final String wireValue;
+    private final String legacyWireValue;
 
-    CheckInInterval(String wireValue) {
+    CheckInInterval(String wireValue, String legacyWireValue) {
       this.wireValue = wireValue;
+      this.legacyWireValue = legacyWireValue;
     }
 
-    /** Maps a lowercase wire string to a variant, or {@code null} when absent or unrecognized. */
+    /**
+     * Maps a lowercase wire string to a variant, or {@code null} when absent or unrecognized.
+     *
+     * <p>Accepts the noun spelling ({@code day}) as well as the server's adverb spelling
+     * ({@code daily}). The server only ever emits the latter; the former is tolerated so a value
+     * a caller persisted against the earlier, incorrect mapping still round-trips.
+     */
     public static CheckInInterval fromWireValue(String raw) {
       if (raw != null) {
         for (CheckInInterval interval : values()) {
-          if (interval.wireValue.equals(raw)) {
+          if (interval.wireValue.equals(raw) || interval.legacyWireValue.equals(raw)) {
             return interval;
           }
         }
@@ -462,7 +517,7 @@ public final class Policy {
       return null;
     }
 
-    /** Returns this interval's lowercase wire value. */
+    /** Returns this interval's lowercase wire value, as the server spells it. */
     public String wireValue() {
       return wireValue;
     }

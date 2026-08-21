@@ -21,6 +21,9 @@ import sh.tamga.sdk.support.CheckoutFixture;
 
 class MachineFileTest {
 
+  /** Year 2286 -- past any {@code exp} these hand-built payloads carry. */
+  private static final long FAR_FUTURE_UNIX_SECONDS = 10_000_000_000L;
+
   private static Ed25519PrivateKeyParameters generateEd25519Key() {
     return new Ed25519PrivateKeyParameters(new SecureRandom());
   }
@@ -43,7 +46,7 @@ class MachineFileTest {
     byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = key.generatePublicKey().getEncoded();
@@ -57,7 +60,7 @@ class MachineFileTest {
     byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ecdsaSign(enc, keyPair.getPrivate());
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "ecdsa-sha256");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ecdsa-p256+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = keyPair.getPublic().getEncoded();
@@ -71,7 +74,7 @@ class MachineFileTest {
     byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.rsaPkcs1Sign(enc, keyPair.getPrivate());
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "rsa-sha256");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+rsa-sha256+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = keyPair.getPublic().getEncoded();
@@ -85,7 +88,7 @@ class MachineFileTest {
     byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.rsaPssSign(enc, keyPair.getPrivate());
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "rsa-pss-sha256");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+rsa-pss-sha256+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = keyPair.getPublic().getEncoded();
@@ -100,7 +103,7 @@ class MachineFileTest {
     byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ecdsaSign(enc, keyPair.getPrivate());
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "ecdsa-sha256");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ecdsa-p256+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] wrongPublicKey = otherKeyPair.getPublic().getEncoded();
@@ -115,7 +118,7 @@ class MachineFileTest {
     byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.rsaPkcs1Sign(enc, keyPair.getPrivate());
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "rsa-sha256");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+rsa-sha256+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] wrongPublicKey = otherKeyPair.getPublic().getEncoded();
@@ -130,7 +133,7 @@ class MachineFileTest {
     byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.rsaPssSign(enc, keyPair.getPrivate());
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "rsa-pss-sha256");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+rsa-pss-sha256+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] wrongPublicKey = otherKeyPair.getPublic().getEncoded();
@@ -156,7 +159,7 @@ class MachineFileTest {
     signer.init(true, key);
     signer.update(json, 0, json.length);
     String sig = Base64.getEncoder().encodeToString(signer.generateSignature());
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = key.generatePublicKey().getEncoded();
@@ -171,7 +174,7 @@ class MachineFileTest {
     byte[] json = CheckoutFixture.fullMachinePayloadJson(fingerprint);
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ed25519Sign(enc, signingKey);
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = signingKey.generatePublicKey().getEncoded();
@@ -196,7 +199,7 @@ class MachineFileTest {
     byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = key.generatePublicKey().getEncoded();
@@ -216,12 +219,26 @@ class MachineFileTest {
     String enc = CheckoutFixture.plainEnc(json);
     // Even a validly-signed PKCS1 signature must not slip through under the JWT scheme.
     String sig = CheckoutFixture.rsaPkcs1Sign(enc, keyPair.getPrivate());
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "rsa-sha256");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+rsa-sha256+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = keyPair.getPublic().getEncoded();
 
     assertThatThrownBy(() -> file.verify(LicenseScheme.RSA_2048_JWT_RS256, publicKey))
+        .isInstanceOf(TamgaCheckoutException.SchemeNotSupportedException.class);
+  }
+
+  /**
+   * The alg cross-check's own half of that guarantee, reached directly because {@link
+   * MachineFile#verify} refuses the scheme before it ever gets here. The server emits the same
+   * {@code rsa-sha256} suffix for {@code RSA_2048_PKCS1_SIGN} and {@code RSA_2048_JWT_RS256}, so
+   * the one thing this table must never do is map the JWT scheme onto that suffix and quietly
+   * agree with a PKCS#1 file's alg.
+   */
+  @Test
+  void algCrossCheckRefusesJwtRs256RatherThanMappingItOntoRsaSha256() {
+    assertThatThrownBy(
+        () -> MachineFileAlg.parse("base64+rsa-sha256+v2", LicenseScheme.RSA_2048_JWT_RS256))
         .isInstanceOf(TamgaCheckoutException.SchemeNotSupportedException.class);
   }
 
@@ -232,7 +249,7 @@ class MachineFileTest {
     byte[] json = CheckoutFixture.machinePayloadJson(fingerprint);
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ed25519Sign(enc, signingKey);
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = signingKey.generatePublicKey().getEncoded();
@@ -251,7 +268,7 @@ class MachineFileTest {
     byte[] json = CheckoutFixture.machinePayloadJson(fingerprint);
     String enc = CheckoutFixture.plainEnc(json);
     String sig = CheckoutFixture.ed25519Sign(enc, signingKey);
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] wrongPublicKey = otherKey.generatePublicKey().getEncoded();
@@ -268,9 +285,9 @@ class MachineFileTest {
     String fingerprint = "machine-fingerprint-xyz";
     byte[] aesKey = Hkdf.deriveMachineFileKey(licenseKey, fingerprint);
     byte[] json = CheckoutFixture.machinePayloadJson(fingerprint);
-    String enc = CheckoutFixture.encryptedEnc(json, aesKey);
+    String enc = CheckoutFixture.machineEncryptedEnc(json, aesKey);
     String sig = CheckoutFixture.ed25519Sign(enc, signingKey);
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "aes-256-gcm+ed25519");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "aes-256-gcm+ed25519+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = signingKey.generatePublicKey().getEncoded();
@@ -293,9 +310,9 @@ class MachineFileTest {
     String realFingerprint = "real-fingerprint";
     byte[] aesKey = Hkdf.deriveMachineFileKey(licenseKey, realFingerprint);
     byte[] json = CheckoutFixture.machinePayloadJson(realFingerprint);
-    String enc = CheckoutFixture.encryptedEnc(json, aesKey);
+    String enc = CheckoutFixture.machineEncryptedEnc(json, aesKey);
     String sig = CheckoutFixture.ed25519Sign(enc, signingKey);
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "aes-256-gcm+ed25519");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "aes-256-gcm+ed25519+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = signingKey.generatePublicKey().getEncoded();
@@ -338,7 +355,7 @@ class MachineFileTest {
   @Test
   void verifyReturnsFalseForMalformedBase64Signature() {
     Ed25519PrivateKeyParameters key = generateEd25519Key();
-    String pem = CheckoutFixture.wrapMachinePem("AA==", "not valid base64!!!", "base64+ed25519");
+    String pem = CheckoutFixture.wrapMachinePem("AA==", "not valid base64!!!", "base64+ed25519+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = key.generatePublicKey().getEncoded();
@@ -351,7 +368,7 @@ class MachineFileTest {
     Ed25519PrivateKeyParameters key = generateEd25519Key();
     String enc = "not valid base64!!!";
     String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = key.generatePublicKey().getEncoded();
@@ -367,7 +384,7 @@ class MachineFileTest {
     byte[] notResourceJson = "not resource json".getBytes(StandardCharsets.UTF_8);
     String enc = Base64.getEncoder().encodeToString(notResourceJson);
     String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519");
+    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519+v2");
 
     MachineFile file = MachineFile.parse(pem);
     byte[] publicKey = key.generatePublicKey().getEncoded();
@@ -377,19 +394,144 @@ class MachineFileTest {
         .isInstanceOf(TamgaCheckoutException.OfflineFileFormatException.class);
   }
 
+  /**
+   * An encrypted {@code enc} is {@code "<nonce_b64>.<ciphertext_b64>"}. Every structurally invalid
+   * shape of that must be rejected as a format error, not smuggled into the cipher: a single blob
+   * with no separator (what this SDK used to expect, and what the server's own stale doc comment
+   * still describes), more than one separator, a nonce that is not 12 bytes, and a ciphertext with
+   * no room for the 16-byte authentication tag.
+   */
   @Test
-  void verifyAndDecryptThrowsForShortEncryptedPayload() {
+  void verifyAndDecryptThrowsForStructurallyInvalidEncryptedPayload() {
     Ed25519PrivateKeyParameters key = generateEd25519Key();
-    String enc = Base64.getEncoder().encodeToString(new byte[] {1, 2, 3});
-    String sig = CheckoutFixture.ed25519Sign(enc, key);
-    String pem = CheckoutFixture.wrapMachinePem(enc, sig, "aes-256-gcm+ed25519");
+    byte[] publicKey = key.generatePublicKey().getEncoded();
+    String twelveBytes = Base64.getEncoder().encodeToString(new byte[12]);
+    String[] malformed = {
+        Base64.getEncoder().encodeToString(new byte[64]),
+        twelveBytes + "." + twelveBytes + "." + twelveBytes,
+        "." + twelveBytes,
+        twelveBytes + ".",
+        Base64.getEncoder().encodeToString(new byte[8]) + "." + twelveBytes,
+        twelveBytes + "." + Base64.getEncoder().encodeToString(new byte[4]),
+    };
 
-    MachineFile file = MachineFile.parse(pem);
+    for (String enc : malformed) {
+      String sig = CheckoutFixture.ed25519Sign(enc, key);
+      MachineFile file = MachineFile.parse(
+          CheckoutFixture.wrapMachinePem(enc, sig, "aes-256-gcm+ed25519+v2"));
+      assertThatThrownBy(() -> file.verifyAndDecrypt(LicenseScheme.ED25519_SIGN, publicKey,
+          "unused", "unused"))
+          .describedAs("enc '%s' must be rejected", enc)
+          .isInstanceOf(TamgaCheckoutException.OfflineFileFormatException.class);
+    }
+  }
+
+  /**
+   * The strict base64 decoder is load-bearing for the dot-separated {@code enc}, so pin it.
+   *
+   * <p>Reading {@code enc} as a single blob is wrong on every platform, but whether it FAILS
+   * depends on the decoder. A 12-byte nonce always encodes to exactly 16 unpadded base64
+   * characters, so {@code nonce_b64 + cipher_b64} is always a multiple of 4: a decoder that
+   * ignores out-of-alphabet characters drops the {@code '.'} and reconstructs
+   * {@code nonce || ciphertext || tag} byte-for-byte, and the old 12-byte slice then lands
+   * correctly by accident. That is why the CPython and Node SDKs in this fleet appeared to work
+   * while implementing the same misreading. Java is where it was visible only because {@code
+   * java.util.Base64.getDecoder()} rejects the separator.
+   *
+   * <p>Swapping {@code Base64Codec} to {@code getMimeDecoder()} -- a plausible "be liberal in what
+   * you accept" refactor -- would re-hide that and quietly soften every nonce/ciphertext guard
+   * around it. This test fails if anyone does.
+   */
+  @Test
+  void base64DecodingIsStrictSoJunkInsideEncIsRejectedNotIgnored() {
+    // The exact shape the accidental-success mechanism depends on.
+    assertThat(Base64Codec.decodeOrNull("AAAAAAAAAAAAAAAA.AAAA")).isNull();
+    assertThat(Base64Codec.decodeOrNull("AAAA AAAA")).isNull();
+
+    Ed25519PrivateKeyParameters key = generateEd25519Key();
+    byte[] aesKey = Hkdf.deriveMachineFileKey("TAMGA-LICENSE-KEY", "fp-abc123");
+    byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123");
+    String valid = CheckoutFixture.machineEncryptedEnc(json, aesKey);
+    int separator = valid.indexOf('.');
+    // A junk character inside the ciphertext half: a lenient decoder would silently skip it and
+    // hand back plaintext, so reaching anything other than a format error means the decoder went
+    // lenient.
+    String enc = valid.substring(0, separator + 3) + "*" + valid.substring(separator + 3);
+    String sig = CheckoutFixture.ed25519Sign(enc, key);
+
+    MachineFile file =
+        MachineFile.parse(CheckoutFixture.wrapMachinePem(enc, sig, "aes-256-gcm+ed25519+v2"));
+    byte[] publicKey = key.generatePublicKey().getEncoded();
+
+    assertThatThrownBy(() -> file.verifyAndDecrypt(LicenseScheme.ED25519_SIGN, publicKey,
+        "TAMGA-LICENSE-KEY", "fp-abc123"))
+        .isInstanceOf(TamgaCheckoutException.OfflineFileFormatException.class);
+  }
+
+  /**
+   * A pre-v2 payload has no signed {@code meta}, so there is nothing to enforce {@code exp}
+   * against. Rejecting it is the second line of defence behind the {@code alg} gate.
+   */
+  @Test
+  void verifyAndDecryptThrowsForPayloadWithNoSignedClaims() {
+    Ed25519PrivateKeyParameters key = generateEd25519Key();
+    byte[] noClaims = ("{\"data\":{\"id\":\"mach_123\",\"type\":\"machines\",\"attributes\":{"
+        + "\"fingerprint\":\"fp-abc123\"}}}").getBytes(StandardCharsets.UTF_8);
+    String enc = CheckoutFixture.plainEnc(noClaims);
+    String sig = CheckoutFixture.ed25519Sign(enc, key);
+
+    MachineFile file =
+        MachineFile.parse(CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519+v2"));
     byte[] publicKey = key.generatePublicKey().getEncoded();
 
     assertThatThrownBy(() -> file.verifyAndDecrypt(LicenseScheme.ED25519_SIGN, publicKey,
         "unused", "unused"))
         .isInstanceOf(TamgaCheckoutException.OfflineFileFormatException.class);
+  }
+
+  /**
+   * {@code exp} is optional by design -- a checkout made without a {@code ttl} produces a file
+   * that genuinely never expires. An absent claim is legitimate, not an error.
+   */
+  @Test
+  void verifyWithClaimsAcceptsFilesThatCarryNoExpiry() {
+    Ed25519PrivateKeyParameters key = generateEd25519Key();
+    byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123", null);
+    String enc = CheckoutFixture.plainEnc(json);
+    String sig = CheckoutFixture.ed25519Sign(enc, key);
+
+    MachineFile file =
+        MachineFile.parse(CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519+v2"));
+    Machine.MachineWithClaims result = file.verifyWithClaims(LicenseScheme.ED25519_SIGN,
+        key.generatePublicKey().getEncoded(), "unused", "fp-abc123", FAR_FUTURE_UNIX_SECONDS);
+
+    assertThat(result.claims().expiresAt()).isNull();
+    assertThat(result.claims().issuedAt()).isEqualTo(1767225600L);
+    assertThat(result.claims().id()).isEqualTo("test-jti");
+    assertThat(result.claims().keyId()).isEqualTo("test-kid");
+    assertThat(result.machine().fingerprint()).isEqualTo("fp-abc123");
+  }
+
+  /**
+   * The no-timestamp overload enforces expiry too -- it is not an opt-in the caller can skip by
+   * choosing the shorter signature.
+   */
+  @Test
+  void verifyAndDecryptEnforcesExpiryAgainstTheSystemClock() {
+    Ed25519PrivateKeyParameters key = generateEd25519Key();
+    long longExpired = 1_000_000_000L;
+    byte[] json = CheckoutFixture.machinePayloadJson("fp-abc123", longExpired);
+    String enc = CheckoutFixture.plainEnc(json);
+    String sig = CheckoutFixture.ed25519Sign(enc, key);
+
+    MachineFile file =
+        MachineFile.parse(CheckoutFixture.wrapMachinePem(enc, sig, "base64+ed25519+v2"));
+    byte[] publicKey = key.generatePublicKey().getEncoded();
+
+    assertThatThrownBy(() -> file.verifyAndDecrypt(LicenseScheme.ED25519_SIGN, publicKey,
+        "unused", "fp-abc123"))
+        .isInstanceOf(TamgaCheckoutException.LicenseFileExpiredException.class)
+        .hasMessageContaining(String.valueOf(longExpired));
   }
 
   @Test
