@@ -22,8 +22,8 @@ import java.util.Map;
  * <p>There is no download URL here, because the release resource carries none: the bytes live on
  * its {@link Artifact}s. That is a change of reason rather than of fact -- this note previously
  * said the artifact route was unreachable to every credential this SDK issues, which stopped being
- * true when {@code Role::LicenseToken} gained {@code artifact.read} and {@code artifact.download}
- * ({@code authz/mod.rs:264-265}). Reach the bytes with
+ * true when {@code Role::LicenseToken} gained {@code artifact.download}
+ * ({@code authz/mod.rs:265}). Reach the bytes with
  * {@code TamgaClient.listArtifacts(release.id(), ...)} followed by
  * {@code requestArtifactDownload(...)}.
  */

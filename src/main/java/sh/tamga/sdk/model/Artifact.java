@@ -25,7 +25,8 @@ import java.util.Map;
  *
  * <p><b>Read and download are the only artifact operations a license key can perform.</b>
  * {@code Role::LicenseToken} carries {@code artifact.read} and {@code artifact.download}
- * ({@code authz/mod.rs:264-265}) and does not carry {@code artifact.create},
+ * ({@code authz/mod.rs:264-265}) -- the first was always there, the second was granted by
+ * {@code e6d317b} -- and does not carry {@code artifact.create},
  * {@code artifact.update} or {@code artifact.delete}, so creating, replacing, uploading or
  * deleting an artifact is refused to every credential this SDK issues. Those routes are
  * deliberately not modelled here.

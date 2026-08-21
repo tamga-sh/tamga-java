@@ -1004,14 +1004,29 @@ public final class TamgaClient {
    * has no way to address the storage host at all.
    *
    * <p><b>Why the redirect is never followed.</b> The route answers {@code 303 See Other} by
-   * default, pointing at that same presigned URL. A client that follows it with the request's
-   * {@code Authorization} header still attached sends the licence key to the storage host. This
-   * SDK therefore always sends {@code ?redirect=false}, which returns the artifact resource with
-   * the URL in the body instead. The client built by {@link Builder} also refuses redirects
-   * outright ({@code followRedirects(false)}), so the default {@code 303} would surface as an
-   * error rather than being followed -- but a caller who supplies their own
-   * {@link OkHttpClient} opts out of that protection, and {@code ?redirect=false} keeps this call
-   * correct for them too.
+   * default, pointing at that same presigned URL, and this SDK always sends
+   * {@code ?redirect=false} instead so the URL comes back in the body. Two independent reasons,
+   * both measured rather than assumed:
+   *
+   * <ul>
+   *   <li><b>Credentials follow the redirect, and how far depends on configuration.</b> Probed
+   *       against okhttp 5.4.0 with a two-server harness: on a <em>cross-origin</em> redirect
+   *       OkHttp strips {@code Authorization} but replays a {@code Cookie} header set directly on
+   *       the request -- which is exactly how {@code AuthTransport.sessionCookie} sends its
+   *       credential. On a <em>same-origin</em> redirect it carries both intact, licence key
+   *       included. Same-origin is not hypothetical: a server configured with an {@code
+   *       s3_endpoint} and path-style addressing serves storage from the API's own origin.
+   *   <li><b>Following it buffers the artifact.</b> The redirect target is the file, and
+   *       {@link Transport} reads a response into memory under a 32 MiB ceiling. An artifact
+   *       routinely exceeds that -- the server accepts uploads up to 1 GiB -- so a followed
+   *       redirect trades a URL for either an out-of-memory guard or a very expensive surprise.
+   *       This reason holds whatever the storage host's origin is.
+   * </ul>
+   *
+   * <p>The client built by {@link Builder} also refuses redirects outright
+   * ({@code followRedirects(false)}), so the default {@code 303} surfaces as an error rather than
+   * being followed -- but a caller who supplies their own {@link OkHttpClient} opts out of that
+   * protection, and {@code ?redirect=false} keeps this call correct for them too.
    *
    * <p><b>A {@code 403} here is not necessarily an auth misconfiguration.</b> The handler enforces
    * the owning release's read gate as well as the {@code artifact.download} permission
@@ -1024,8 +1039,12 @@ public final class TamgaClient {
    * All four carry the generic code {@code FORBIDDEN} and differ only in {@code detail}, so treat
    * the code as "not for this license" rather than as a credential problem to retry.
    *
-   * <p>A {@code 422 STORAGE_UNAVAILABLE} means the server has no object storage configured; a
-   * {@code 422 PRESIGN_TTL_INVALID} means a lifetime outside the accepted range reached the server.
+   * <p>A {@code 422 STORAGE_UNAVAILABLE} means the server has no object storage configured. A
+   * lifetime outside the accepted range that reaches the server comes back as {@code 422
+   * PRESIGN_TTL_INVALID} -- note the prefix: that is a different code from the {@code TTL_INVALID}
+   * the checkout routes use, so it does <b>not</b> arrive as
+   * {@link TamgaApiException.TtlInvalidException}. The range is checked here anyway, so a caller
+   * should not be able to provoke it.
    *
    * @param artifactId the artifact to mint a URL for
    * @param ttl how long the URL should stay valid, between {@link Artifact#MIN_DOWNLOAD_TTL} and

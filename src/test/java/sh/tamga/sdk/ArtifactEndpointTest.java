@@ -19,9 +19,10 @@ import sh.tamga.sdk.model.ListOptions;
 import sh.tamga.sdk.model.Page;
 
 /**
- * The artifact read and download surface, reachable by a licence key only since
- * {@code Role::LicenseToken} gained {@code artifact.read} and {@code artifact.download}
- * ({@code authz/mod.rs:264-265}).
+ * The artifact read and download surface. Reading metadata was always permitted to a licence key
+ * ({@code artifact.read}, {@code authz/mod.rs:264}); fetching the bytes was not, until
+ * {@code Role::LicenseToken} gained {@code artifact.download} ({@code :265}) -- which is why all
+ * three routes are only worth modelling now.
  *
  * <p>Three server behaviours are pinned here because each has a plausible wrong answer that no
  * other test would catch: the timestamps are {@code created}/{@code updated} under a camelCase
@@ -294,6 +295,21 @@ class ArtifactEndpointTest {
     assertThatThrownBy(() -> client.requestArtifactDownload("art-1"))
         .isInstanceOf(TamgaApiException.ForbiddenException.class)
         .hasMessageContaining("admins, developers, and product tokens");
+  }
+
+  @Test
+  void presignTtlInvalidIsNotTheCheckoutTtlInvalidCode() {
+    // The download route's code is PRESIGN_TTL_INVALID (artifacts/service.rs:33) while the
+    // checkout routes use TTL_INVALID (check_out_license.rs:48). The typed exception is keyed on
+    // the unprefixed spelling, so a caller catching TtlInvalidException around a download would
+    // miss this one. Pinned so nobody assumes the mapping either way. The client validates the
+    // range locally, so reaching this at all takes a server whose bounds have moved.
+    enqueueError(422, "PRESIGN_TTL_INVALID",
+        "Presigned URL TTL must be between 1 minute and 1 week");
+
+    assertThatThrownBy(() -> client.requestArtifactDownload("art-1"))
+        .isInstanceOf(TamgaApiException.class)
+        .isNotInstanceOf(TamgaApiException.TtlInvalidException.class);
   }
 
   @Test

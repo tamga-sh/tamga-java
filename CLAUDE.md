@@ -145,16 +145,29 @@ source doc for the full set, including analytics/EE items that don't touch this 
 - **The artifact read and download routes are reachable now, and are implemented.** The previous
   directive here — "`artifact.download` is in no role's default permission set, so that one is
   genuinely blocked upstream" — was true when written and is no longer: tamga-api `e6d317b`
-  ("grant artifact.download explicitly and gate the download route") added `artifact.read` and
-  `artifact.download` to `Role::LicenseToken` (`authz/mod.rs:264-265`) and routed a real handler.
+  ("grant artifact.download explicitly and gate the download route") added `artifact.download` to
+  `Role::LicenseToken` (`authz/mod.rs:265`) and routed a real handler. It added exactly that one
+  string; `artifact.read` (`:264`) was already there, so listing and showing an artifact's metadata
+  was never the blocked half — only fetching its bytes was.
   `listArtifacts`, `getArtifact` and `requestArtifactDownload` cover them. Three constraints the
   implementation encodes, each with a plausible wrong answer:
-  - **The download answers `303 See Other`** to a short-lived presigned storage URL. Never follow
-    it with the request's `Authorization` header still attached — that hands the licence key to
-    the storage host. The client always sends `?redirect=false`, which returns the artifact
-    resource with `redirectUrl` populated; fetch that URL with **no** credentials. The
-    `OkHttpClient` this SDK builds also refuses redirects outright, so the `303` would surface as
-    an error rather than being followed, but a caller supplying their own client opts out of that.
+  - **The download answers `303 See Other`** to a short-lived presigned storage URL, and the
+    client always sends `?redirect=false` instead, then hands the caller a URL to fetch with **no**
+    credentials. Two measured reasons, either sufficient. (a) Credentials survive a followed
+    redirect: probed against okhttp 5.4.0 with a two-server harness, a *cross-origin* redirect
+    strips `Authorization` but replays a directly-set `Cookie` — which is exactly how
+    `AuthTransport.sessionCookie` sends its credential — while a *same-origin* redirect carries
+    both intact, licence key included. Same-origin is a supported deployment: an `s3_endpoint`
+    with path-style addressing serves storage from the API's own origin. (b) Following it buffers
+    the artifact, and `Transport` caps a response at 32 MiB while the server accepts 1 GiB uploads.
+    The `OkHttpClient` this SDK builds also refuses redirects outright, so the `303` would surface
+    as an error rather than being followed, but a caller supplying their own client opts out of
+    that.
+  - **A bad `ttl` answers `422 PRESIGN_TTL_INVALID`, not `TTL_INVALID`** (`artifacts/service.rs:33`
+    vs `check_out_license.rs:48`). The prefix matters: `TamgaApiException.TtlInvalidException` is
+    keyed on the unprefixed code, so the download's version does **not** land there. The client
+    validates the range locally against the server's own bounds, so a caller should not be able to
+    provoke it at all.
   - **`ArtifactAttributes` is `rename_all = "camelCase"` AND carries explicit
     `#[serde(rename = "created")]` / `#[serde(rename = "updated")]`** (`artifacts/serializer.rs:20`,
     `:34-37`). So the wire names are `redirectUrl` but `created`/`updated` — **not**

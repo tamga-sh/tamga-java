@@ -166,12 +166,21 @@ for (Artifact artifact : client.listArtifacts(upgrade.release().id(), ListOption
 ```
 
 **Send no credentials to `redirectUrl()`.** It points at object storage, not at the API, and its
-presigned query string is the whole authorisation. The route's own default is a `303 See Other` to
-that URL; a client that follows it with the request's `Authorization` header still attached hands
-your licence key to the storage host. This SDK asks for `?redirect=false` and returns the URL
-instead, and the client it builds refuses redirects outright — but the fetch is yours, so use a
-plain HTTP client with no auth header and no session cookie on it, and verify `checksum()`
-afterwards.
+presigned query string is the whole authorisation. Use a plain HTTP client with no auth header and
+no session cookie on it, and verify `checksum()` afterwards.
+
+The route's own default is a `303 See Other` to that URL, which this SDK never takes: it asks for
+`?redirect=false` and hands you the URL instead, and the client it builds refuses redirects
+outright. Two measured reasons, either one sufficient:
+
+- **Credentials survive the hop, and how far depends on the server's storage configuration.**
+  Probed against okhttp 5.4.0: on a *cross-origin* redirect OkHttp strips `Authorization` but
+  replays a `Cookie` header set directly on the request — which is how the session-cookie transport
+  sends its credential. On a *same-origin* redirect it carries both, licence key included, and a
+  server with an `s3_endpoint` and path-style addressing serves storage from the API's own origin.
+- **Following it buffers the file.** The redirect target is the artifact itself, and the transport
+  reads responses into memory under a 32 MiB ceiling while the server accepts uploads up to 1 GiB.
+  This one holds regardless of where storage lives.
 
 A `403` here is not necessarily a credential problem: the handler enforces the owning release's
 read gate as well as the `artifact.download` permission, so a product on the `CLOSED` distribution
@@ -623,9 +632,9 @@ boundaries, not oversights.
   there is no client-side way to separate them. A suspended license is the exception: it comes
   back as `403` rather than being folded into the `204`. No download URL is returned by the check
   itself — the bytes hang off the release's artifacts, which `listArtifacts` and
-  `requestArtifactDownload` now reach (`Role::LicenseToken` gained `artifact.read` and
-  `artifact.download`; creating, updating, deleting and uploading artifacts remain out of reach and
-  are not modelled). RFC 9421 response-signature verification is still not implemented.
+  `requestArtifactDownload` now reach (reading artifact metadata was always permitted to a licence
+  key; fetching the bytes was not, until `Role::LicenseToken` gained `artifact.download`. Creating,
+  updating, deleting and uploading artifacts remain out of reach and are not modelled). RFC 9421 response-signature verification is still not implemented.
 
 **Transport hardening**
 
