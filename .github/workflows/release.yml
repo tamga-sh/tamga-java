@@ -86,7 +86,11 @@ jobs:
       - uses: googleapis/release-please-action@v5
         id: release
         with:
-          release-type: simple
+          # Manifest mode, not `release-type:` -- the two are mutually exclusive
+          # inputs, and passing both makes release-please ignore the config file
+          # (so `extra-files` silently stops applying).
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
           token: ${{ steps.app-token.outputs.token }}
 
   publish:
