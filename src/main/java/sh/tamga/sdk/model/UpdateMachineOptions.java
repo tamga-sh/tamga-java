@@ -21,6 +21,11 @@ import java.util.Map;
  * <p><b>{@code memory} and {@code disk} are megabytes, not bytes</b>, the same as on
  * {@link CreateMachineOptions}. Sending bytes inflates the license's running total by a factor of
  * about a million and makes the next activation on that license fail on a memory limit.
+ *
+ * <p>The {@link Machine} this update returns is the one response in the protocol that is a write
+ * and can still report {@link HeartbeatStatus#DEAD}, and whose {@link Machine#nextHeartbeatAt()}
+ * is measured against the 600-second fallback rather than the policy window. See
+ * {@code TamgaClient.updateMachine}.
  */
 public final class UpdateMachineOptions {
 

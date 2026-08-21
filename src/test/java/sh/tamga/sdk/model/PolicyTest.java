@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
+import java.time.Duration;
 import org.junit.jupiter.api.Test;
 
 /** Policy decoding, with emphasis on the two bogus real-world defaults. */
@@ -61,12 +62,42 @@ class PolicyTest {
   }
 
   @Test
-  void checkInIntervalWireValuesAreLowercase() throws Exception {
-    // The one casing exception in an otherwise uppercase protocol.
+  void checkInIntervalWireValuesAreLowercaseAdverbs() throws Exception {
+    // The one casing exception in an otherwise uppercase protocol -- and the spelling is the
+    // adverb the server's own accepted set uses ("daily"), not the bare noun this SDK expected
+    // before any policy read existed to disprove it. A real policy decoded to null under the old
+    // mapping.
+    assertThat(parse("{\"check_in_interval\":\"monthly\"}").checkInInterval())
+        .isEqualTo(Policy.CheckInInterval.MONTH);
+    assertThat(parse("{\"check_in_interval\":\"daily\"}").checkInInterval())
+        .isEqualTo(Policy.CheckInInterval.DAY);
+    assertThat(parse("{\"check_in_interval\":\"weekly\"}").checkInInterval())
+        .isEqualTo(Policy.CheckInInterval.WEEK);
+    assertThat(parse("{\"check_in_interval\":\"yearly\"}").checkInInterval())
+        .isEqualTo(Policy.CheckInInterval.YEAR);
+    assertThat(Policy.CheckInInterval.DAY.wireValue()).isEqualTo("daily");
+    assertThat(parse("{\"check_in_interval\":\"MONTHLY\"}").checkInInterval()).isNull();
+  }
+
+  @Test
+  void checkInIntervalStillAcceptsTheNounSpellingOnInput() throws Exception {
+    // Tolerated so a value persisted against the earlier, incorrect mapping keeps parsing. The
+    // server never emits these.
     assertThat(parse("{\"check_in_interval\":\"month\"}").checkInInterval())
         .isEqualTo(Policy.CheckInInterval.MONTH);
-    assertThat(Policy.CheckInInterval.DAY.wireValue()).isEqualTo("day");
-    assertThat(parse("{\"check_in_interval\":\"MONTH\"}").checkInInterval()).isNull();
+    assertThat(parse("{\"check_in_interval\":\"day\"}").checkInInterval())
+        .isEqualTo(Policy.CheckInInterval.DAY);
+    assertThat(parse("{\"check_in_interval\":\"nonsense\"}").checkInInterval()).isNull();
+  }
+
+  @Test
+  void theEffectiveHeartbeatWindowFallsBackToTenMinutes() throws Exception {
+    // Mirrors Policy::effective_heartbeat_duration_secs -- the policy value, else 600.
+    assertThat(parse("{}").effectiveHeartbeatWindow()).isEqualTo(Duration.ofSeconds(600));
+    assertThat(parse("{\"heartbeat_duration\":null}").effectiveHeartbeatWindow())
+        .isEqualTo(Policy.DEFAULT_HEARTBEAT_WINDOW);
+    assertThat(parse("{\"heartbeat_duration\":120}").effectiveHeartbeatWindow())
+        .isEqualTo(Duration.ofSeconds(120));
   }
 
   @Test
@@ -152,7 +183,7 @@ class PolicyTest {
   }
 
   @Test
-  void policyMetadataIsExposedAsAnUnmodifiableView() throws Exception {
+  void policyMetadataIsExposedAsUnmodifiableView() throws Exception {
     Policy policy = parse("{\"metadata\":{\"tier\":\"gold\"}}");
     java.util.Map<String, Object> metadata = policy.metadata();
 

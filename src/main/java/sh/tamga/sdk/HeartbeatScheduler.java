@@ -38,7 +38,9 @@ import sh.tamga.sdk.model.Policy;
  * nested one is authorised as a license read and works. Do <em>not</em> try to recover the window
  * from a ping instead -- {@link Machine#nextHeartbeatAt()} carries the true value only on the
  * checkout-family responses and the 600-second fallback everywhere else, with nothing on the wire
- * to say which one arrived. See that method.
+ * to say which one arrived. See that method. {@link TamgaClient#updateMachine} is on the wrong
+ * side of that split too: it is a write, but one that reports the 600-second fallback and can
+ * still answer {@link HeartbeatStatus#DEAD}, so nothing it returns is usable for sizing either.
  *
  * <pre>{@code
  * HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, machineId)

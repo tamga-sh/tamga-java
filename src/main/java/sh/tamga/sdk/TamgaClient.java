@@ -351,6 +351,11 @@ public final class TamgaClient {
    * the timestamp alone and never consults {@code require_heartbeat}, which defaults to false and
    * is what the cull job requires. Keep pinging; the only row-is-gone signal is a {@code 404} from
    * the ping itself.
+   *
+   * <p><b>Not scoped to the caller's own license.</b> No machine route applies a license-scope
+   * check, so a credential holding {@code machine.read} reads any machine in the account. The
+   * resource carries no license id either, so a machine read this way cannot be attributed to a
+   * license from its own fields.
    */
   public Machine getMachine(String machineId) {
     JsonNode root = transport.getJson(Arrays.asList("machines", machineId), null);
@@ -434,6 +439,20 @@ public final class TamgaClient {
    *
    * <p>{@code memory} and {@code disk} are <b>megabytes</b>, exactly as on
    * {@link CreateMachineOptions}.
+   *
+   * <p><b>This is a write whose response can still report {@link HeartbeatStatus#DEAD}</b>, which
+   * makes it the exception to the otherwise reliable rule that a write never can. The rule holds
+   * because a write normally sets {@code last_heartbeat_at} and then derives the status from the
+   * timestamp it just wrote; this update touches neither, so the status is measured against a
+   * clock nothing reset. Its {@code UPDATE ... RETURNING} also does not join {@code policies}, so
+   * the {@link Machine#nextHeartbeatAt()} that comes back is computed against the 600-second
+   * fallback rather than the policy window -- treat a machine from this route as unusable for
+   * sizing a heartbeat interval.
+   *
+   * <p><b>Not scoped to the caller's own license.</b> The server authorises this on the
+   * {@code machine.update} permission alone and applies no license-scope check to any machine
+   * route, so a credential that can call this can update any machine in the account. That is a
+   * server-side gap, reported upstream; do not build on the assumption that it is confined.
    */
   public Machine updateMachine(String machineId, UpdateMachineOptions options) {
     UpdateMachineOptions opts = options == null ? UpdateMachineOptions.none() : options;
