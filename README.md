@@ -542,6 +542,14 @@ boundaries, not oversights.
   of this, and then the redirect policy is yours.
 - **Response bodies are capped at 32 MiB.** A timeout bounds how long a response may take, not how
   large it may be.
+- **The `x-ratelimit-*` headers are surfaced, but only on the error path.** The server's rate-limit
+  middleware writes all four -- `limit`, `remaining`, `reset` and `window` -- onto every response it
+  handles, and they arrive as `ResponseMetadata.rateLimit()`, a `RateLimitInfo`. Like the rest of
+  that bag they reach you through `TamgaApiException.responseMetadata()`, so a successful call
+  discards them: the useful reading is the 429 that survives the retry budget. Absence is normal
+  and is `RateLimitInfo.ABSENT` (`-1`), never `0` -- rate limiting is disabled outright when the
+  server cannot build its Redis pool, and then no header is written at all. `reset` is an absolute
+  Unix timestamp, not a delay.
 - **Exception messages embed server-supplied text.** `TamgaApiException.getMessage()` includes the
   server's `detail`. Treat it as untrusted when logging.
 
