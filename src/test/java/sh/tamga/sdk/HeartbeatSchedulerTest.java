@@ -51,6 +51,26 @@ class HeartbeatSchedulerTest {
         .build());
   }
 
+  // Returns the counter once two readings 50ms apart agree, or the latest reading if it never
+  // settles within the timeout. In that second case the caller's follow-up assertion is what
+  // reports the failure: a timer that is genuinely still scheduling work keeps incrementing, so
+  // the value moves again during the caller's sleep and the equality check fails as intended.
+  // This distinguishes "one straggler drained" from "the timer is still alive", which is the
+  // property under test.
+  private static int awaitSettled(AtomicInteger counter) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    int previous = -1;
+    while (System.nanoTime() < deadline) {
+      int current = counter.get();
+      if (current == previous) {
+        return current;
+      }
+      previous = current;
+      Thread.sleep(50);
+    }
+    return counter.get();
+  }
+
   @Test
   void defaultIntervalIsThirdOfServerWindow() {
     // 600s is the server's default machine window, applied when policy.heartbeat_duration is null;
@@ -146,7 +166,22 @@ class HeartbeatSchedulerTest {
     assertThat(scheduler.running()).isTrue();
     scheduler.stop();
 
-    assertThat(seen.subList(0, 4)).containsExactly(HeartbeatStatus.DEAD, HeartbeatStatus.DEAD,
+    // Snapshot under the list's own monitor before asserting. Collections.synchronizedList only
+    // synchronizes individual mutations; iterating one -- which is what containsExactly does, and
+    // a subList view inherits the backing list's modCount besides -- requires the caller to hold
+    // that monitor. stop() interrupts the timer but a tick already blocked in its HTTP call still
+    // runs to completion and still adds, so asserting against the live list raced that add and
+    // threw ConcurrentModificationException on three of six CI runners.
+    List<HeartbeatStatus> snapshot;
+    synchronized (seen) {
+      snapshot = new ArrayList<>(seen);
+    }
+
+    // Assert a floor and the first four, never an exact size. The property is that no status ends
+    // the loop, so a fifth tick is not a failure -- it is more evidence the loop kept running.
+    // Demanding exactly four would couple the test to scheduling luck rather than to the property.
+    assertThat(snapshot).hasSizeGreaterThanOrEqualTo(4);
+    assertThat(snapshot.subList(0, 4)).containsExactly(HeartbeatStatus.DEAD, HeartbeatStatus.DEAD,
         HeartbeatStatus.DEAD, HeartbeatStatus.ALIVE);
     assertThat(server.getRequestCount()).isGreaterThanOrEqualTo(4);
   }
@@ -265,8 +300,12 @@ class HeartbeatSchedulerTest {
     scheduler.stop();
     assertThat(scheduler.running()).isFalse();
 
-    // A stopped scheduler must actually be stopped: the tick count has to settle.
-    int settled = ticks.get();
+    // A stopped scheduler must actually be stopped: the tick count has to settle. Read it only
+    // once it has stopped moving -- same in-flight-tick race as the test above, in counter form.
+    // stop() interrupts the timer, but a tick already inside its HTTP call still completes and
+    // still increments, so snapshotting the instant stop() returns could catch that straggler
+    // landing during the sleep and fail on a drained scheduler that is behaving correctly.
+    int settled = awaitSettled(ticks);
     Thread.sleep(150);
     assertThat(ticks.get()).isEqualTo(settled);
   }
