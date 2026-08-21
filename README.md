@@ -348,8 +348,14 @@ boundaries, not oversights.
   the entire validate call with `422 SCOPE_NOT_SUPPORTED` when either field is present, so a
   caller who sets one would get no verdict at all. Dropping them degrades that to a validate which
   simply does not apply the constraint.
-- **The heartbeat window is a hardcoded 600s**, not driven by `policy.heartbeat_duration` despite
-  that field existing. `HeartbeatScheduler` derives its interval from the real 600s.
+- **The heartbeat window is policy-driven; 600s is only the fallback.** The server's effective
+  window is `policy.heartbeat_duration` when the policy sets it, and 600s only when it is null.
+  **`HeartbeatScheduler`'s default interval is still computed against the 600s fallback**, so on a
+  policy with a shorter window the default ping rate is too slow and machines will read `DEAD`
+  between pings. Callers on such a policy must pass their own `interval(...)` — and today they must
+  learn their window out of band, because this SDK exposes no way to read the policy.
+  `Machine.nextHeartbeatAt()` does not help: none of the machine responses this client can reach
+  join the policy, so that field always reports the 600s fallback too.
 - **`HeartbeatStatus.DEAD` does not mean the machine was culled.** It means only that the last ping
   is older than the window. The server computes it from `last_heartbeat_at` alone and never
   consults `policy.require_heartbeat`, which defaults to `false` and is exactly what the cull job

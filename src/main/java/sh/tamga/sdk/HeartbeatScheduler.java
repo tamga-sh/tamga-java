@@ -12,10 +12,17 @@ import sh.tamga.sdk.model.Machine;
 /**
  * Pings a machine's heartbeat on a timer.
  *
- * <p>The server's heartbeat window is a <b>hardcoded 600 seconds</b>, not driven by the policy's
- * {@code heartbeat_duration} despite that field existing. {@link #DEFAULT_INTERVAL} is a third of
- * the window, which tolerates two consecutive failed pings before the machine starts reporting
- * {@link HeartbeatStatus#DEAD}.
+ * <p>The server's heartbeat window is the policy's {@code heartbeat_duration} when that field is
+ * set, and 600 seconds only when it is null. {@link #DEFAULT_INTERVAL} is a third of that 600s
+ * fallback, which tolerates two consecutive failed pings before the machine starts reporting
+ * {@link HeartbeatStatus#DEAD} -- on a policy that leaves {@code heartbeat_duration} unset.
+ *
+ * <p><b>The default interval does not adapt to a shorter policy window.</b> On a policy whose
+ * {@code heartbeat_duration} is below 600 seconds the default ping rate is too slow, and the
+ * machine will read {@link HeartbeatStatus#DEAD} between pings. Such callers must set
+ * {@link Builder#interval(Duration)} themselves. This SDK cannot tell them what their window is:
+ * it exposes no policy read, and {@link Machine#nextHeartbeatAt()} is no substitute -- see that
+ * method. The window has to be learned out of band.
  *
  * <pre>{@code
  * HeartbeatScheduler scheduler = HeartbeatScheduler.builder(client, machineId)
@@ -55,10 +62,17 @@ import sh.tamga.sdk.model.Machine;
  */
 public final class HeartbeatScheduler implements AutoCloseable {
 
-  /** The server's hardcoded machine heartbeat window. */
+  /**
+   * The server's <b>default</b> machine heartbeat window, which applies only when the policy's
+   * {@code heartbeat_duration} is null. A policy that sets that field overrides the window, and
+   * this constant does not track the override.
+   */
   public static final Duration WINDOW = Duration.ofSeconds(600);
 
-  /** A third of {@link #WINDOW}, leaving room for two consecutive failures. */
+  /**
+   * A third of {@link #WINDOW}, leaving room for two consecutive failures -- but only on a policy
+   * that leaves {@code heartbeat_duration} unset. See the class Javadoc before relying on it.
+   */
   public static final Duration DEFAULT_INTERVAL = Duration.ofSeconds(WINDOW.getSeconds() / 3);
 
   private final TamgaClient client;
@@ -184,7 +198,8 @@ public final class HeartbeatScheduler implements AutoCloseable {
 
     /**
      * Overrides the ping interval. A non-positive value falls back to {@link #DEFAULT_INTERVAL}.
-     * Keep it comfortably below {@link #WINDOW}.
+     * Keep it comfortably below the policy's effective window -- {@link #WINDOW} is only the
+     * window a policy gets when it leaves {@code heartbeat_duration} unset.
      */
     public Builder interval(Duration value) {
       this.interval = value == null || value.isNegative() || value.isZero()

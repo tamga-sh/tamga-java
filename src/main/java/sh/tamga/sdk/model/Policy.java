@@ -152,8 +152,10 @@ public final class Policy {
   }
 
   /**
-   * Returns {@code policy.heartbeat_duration}. <b>Do not derive a ping interval from this.</b> The
-   * server ignores it: the machine heartbeat window is a hardcoded 600 seconds.
+   * Returns {@code policy.heartbeat_duration}, the machine heartbeat window in seconds. When set
+   * this <b>is</b> the effective window; the server falls back to 600 seconds only when it is
+   * null. Note that {@link sh.tamga.sdk.HeartbeatScheduler}'s default interval is derived from
+   * that 600s fallback, so a policy with a shorter window needs an explicit interval.
    */
   public Integer heartbeatDuration() {
     return heartbeatDuration;

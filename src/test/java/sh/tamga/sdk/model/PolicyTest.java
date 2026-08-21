@@ -96,7 +96,7 @@ class PolicyTest {
     assertThat(policy.floating()).isTrue();
     assertThat(policy.strict()).isFalse();
     assertThat(policy.created()).isNotNull();
-    // Present on the wire, but the server ignores it: the heartbeat window is a fixed 600s.
+    // This is the effective heartbeat window; the server falls back to 600s only when it is null.
     assertThat(policy.heartbeatDuration()).isEqualTo(900);
   }
 

@@ -88,7 +88,7 @@ tamga-java/
 │   │       ├── Transport.java              # OkHttp-based transport — hand-rolled
 │   │       ├── AuthTransport.java          # the seven auth forms, as static factories
 │   │       ├── EntitlementCache.java       # 60s TTL, keyed by license id
-│   │       ├── HeartbeatScheduler.java     # 600s window (ProcessHeartbeatScheduler is 30s)
+│   │       ├── HeartbeatScheduler.java     # 600s default window (Process one is a fixed 30s)
 │   │       ├── model/                      # License, Machine, Component, Process, Entitlement,
 │   │       │                               #   Policy, Scope, ValidationCode/Meta, Page,
 │   │       │                               #   CanonicalJson, TamgaJsonMapper
@@ -257,12 +257,21 @@ source doc for the full set, including analytics/EE items that don't touch this 
   `effectiveOverageStrategy()`/`effectiveResurrectionStrategy()`/`effectiveCullStrategy()`
   normalizers. Read the raw field and you get a false negative; `"DENY_ACCESS"` in particular
   reads as maximally restrictive and means the opposite.
-- **Heartbeat windows are hardcoded, not policy-driven.** Machine heartbeat window is a hardcoded
-  600s regardless of `policy.heartbeat_duration`; process heartbeat window is a hardcoded 30s with
-  no resurrection grace period at all. Any heartbeat-scheduler helper should derive its ping
-  interval from these hardcoded constants, not from a policy value the server ignores.
-  `HeartbeatScheduler.WINDOW`/`ProcessHeartbeatScheduler.WINDOW` encode them, with the default
-  interval at a third of the window so two consecutive failed pings are survivable.
+- **The machine heartbeat window IS policy-driven; 600s is only the fallback.**
+  `Policy::effective_heartbeat_duration_secs` returns `policy.heartbeat_duration` when the policy
+  sets it and 600 only when it is null, and the cull job's claim query agrees
+  (`COALESCE(p.heartbeat_duration, 600)`). An earlier note here claimed the window was a hardcoded
+  600s regardless of the policy — that was false and is reversed. The **process** window is
+  genuinely hardcoded, at a fixed `INTERVAL '30 seconds'` with no resurrection grace period.
+- **But this SDK's default ping interval still assumes the 600s fallback.**
+  `HeartbeatScheduler.DEFAULT_INTERVAL` is a third of `WINDOW` (600s), so on a policy with a
+  shorter `heartbeat_duration` the default ping rate is too slow and the machine reads `DEAD`
+  between pings. Callers on such a policy must set the interval themselves. They cannot learn
+  their window from this SDK: it exposes no `getPolicy`/`getMachine`, and `Machine.nextHeartbeatAt`
+  is not a workaround — the server computes that field from the window joined onto the machine row,
+  and none of the reachable responses (activate, create, ping-heartbeat, reset-heartbeat) join the
+  policy, so it always reports the 600s fallback. Making the scheduler policy-aware needs a policy
+  read this SDK does not yet have; until then the window comes from out of band.
 - **`HEARTBEAT_STATUS == DEAD` is a staleness report, not a tombstone.** The earlier directive
   ("DEAD means the row was culled, so re-activate instead of pinging") was false and is reversed.
   `Machine::heartbeat_status*` derives the value from `last_heartbeat_at` against the window and

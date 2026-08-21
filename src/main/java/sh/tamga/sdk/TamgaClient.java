@@ -351,8 +351,10 @@ public final class TamgaClient {
   /**
    * Sends a heartbeat ping for a machine.
    *
-   * <p>The server's heartbeat window is a hardcoded 600 seconds regardless of the policy's
-   * {@code heartbeat_duration}. Use {@link HeartbeatScheduler} rather than driving this by hand.
+   * <p>The server's heartbeat window is the policy's {@code heartbeat_duration} when that field is
+   * set, and 600 seconds only when it is null. Use {@link HeartbeatScheduler} rather than driving
+   * this by hand -- but note its default interval is derived from the 600s fallback, so on a
+   * policy with a shorter window the caller must set the interval explicitly.
    */
   public Machine pingHeartbeat(String machineId) {
     JsonNode root = transport.postJson(

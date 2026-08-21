@@ -53,6 +53,8 @@ class HeartbeatSchedulerTest {
 
   @Test
   void defaultIntervalIsThirdOfServerWindow() {
+    // 600s is the server's default machine window, applied when policy.heartbeat_duration is null;
+    // a policy that sets that field overrides it and the default interval does not follow.
     assertThat(HeartbeatScheduler.WINDOW).isEqualTo(Duration.ofSeconds(600));
     assertThat(HeartbeatScheduler.DEFAULT_INTERVAL).isEqualTo(Duration.ofSeconds(200));
     assertThat(ProcessHeartbeatScheduler.WINDOW).isEqualTo(Duration.ofSeconds(30));

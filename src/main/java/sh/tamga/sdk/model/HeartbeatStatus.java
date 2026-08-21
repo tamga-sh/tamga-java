@@ -1,9 +1,11 @@
 package sh.tamga.sdk.model;
 
 /**
- * A machine's heartbeat state. GOTCHA: the 600s (10 min) heartbeat window is hardcoded
- * server-side, NOT driven by {@code policy.heartbeat_duration} -- a future heartbeat-scheduler
- * helper must not derive its ping interval from that field.
+ * A machine's heartbeat state. The window is the policy's {@code heartbeat_duration} when that
+ * field is set, and 600s (10 min) only when it is null. GOTCHA:
+ * {@link sh.tamga.sdk.HeartbeatScheduler}'s default ping interval is derived from that 600s
+ * fallback, so a policy with a shorter window needs an explicitly configured interval or the
+ * machine will read {@link #DEAD} between pings.
  */
 public enum HeartbeatStatus {
   /** Wire value {@code NOT_STARTED} -- never pinged. */

@@ -126,7 +126,14 @@ public final class Machine {
     return disk;
   }
 
-  /** Returns when the next heartbeat is expected, or {@code null}. */
+  /**
+   * Returns when the next heartbeat is expected, or {@code null}.
+   *
+   * <p><b>Not a way to learn the policy's heartbeat window.</b> The server derives this field from
+   * the window joined onto the machine row, and none of the machine responses this SDK can reach
+   * (activate, create, ping-heartbeat, reset-heartbeat) perform that join -- so it always reflects
+   * the 600-second fallback, even on a policy whose {@code heartbeat_duration} is shorter.
+   */
   public Instant nextHeartbeatAt() {
     return nextHeartbeatAt;
   }

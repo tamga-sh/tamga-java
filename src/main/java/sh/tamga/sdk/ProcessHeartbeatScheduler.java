@@ -11,9 +11,10 @@ import sh.tamga.sdk.model.Process;
 /**
  * Pings a process's heartbeat on a timer.
  *
- * <p>The process window is a <b>hardcoded 30 seconds</b> -- far shorter than a machine's 600 -- and
- * has no resurrection grace period at all: once a process misses its window the row is deleted
- * outright rather than being marked dead and revivable.
+ * <p>The process window is a <b>hardcoded 30 seconds</b> -- genuinely fixed, unlike a machine's,
+ * which the owning policy can set via {@code heartbeat_duration} -- and has no resurrection grace
+ * period at all: once a process misses its window the row is deleted outright rather than being
+ * marked dead and revivable.
  *
  * <p>That makes the tick callback more important here than for machines. A failed ping is much
  * closer to losing the process registration entirely, and the correct recovery is usually to
