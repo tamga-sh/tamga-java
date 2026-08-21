@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.3.1](https://github.com/tamga-sh/tamga-java/compare/v1.3.0...v1.3.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* add the endpoint surface the SDK could not reach ([d22004e](https://github.com/tamga-sh/tamga-java/commit/d22004ead7078b56f315a3462882bc7ae3731612))
+* add the endpoint surface the SDK could not reach ([3ad3c94](https://github.com/tamga-sh/tamga-java/commit/3ad3c94f7374cc2d8e6db714c44d18792f113d56))
+* align the client with the current tamga-api server contract ([c2926e2](https://github.com/tamga-sh/tamga-java/commit/c2926e28cbf81512aef7d66ee384f6540452a80e))
+* align the SDK with the current tamga-api server contract ([6b9cf39](https://github.com/tamga-sh/tamga-java/commit/6b9cf3984560f8aade6a7e63e5c23893b82d0609))
+* close the security review's LOWs and the codecov patch gap ([99d3175](https://github.com/tamga-sh/tamga-java/commit/99d317506c881e5c8b568592bc6bd74ac75d00b1))
+* correct the DEAD heartbeat guidance and pin the ping loop ([a9dbe49](https://github.com/tamga-sh/tamga-java/commit/a9dbe492be57f935c945a7578709efc0e1a795fd))
+* correct the heartbeat window claim without overpromising the scheduler ([d61619b](https://github.com/tamga-sh/tamga-java/commit/d61619bf8db6529f5edda18c3dc9b0d951cd0b1a))
+* cover the new endpoint surface with tests ([3d92349](https://github.com/tamga-sh/tamga-java/commit/3d923496b6c6e4d9f522ab1e5db6c01fee50b542))
+* document the new endpoint surface and the findings behind it ([a160207](https://github.com/tamga-sh/tamga-java/commit/a160207283e7fbbb7bc78cce35b3b0a156d44cad))
+* name the machine page-size constant after whose default it is ([8afe244](https://github.com/tamga-sh/tamga-java/commit/8afe244e620836a8dd6d1bd4e7dc6bbe1a8b6133))
+* pin the interval floor against the server's truncating liveness rule ([7ebb95e](https://github.com/tamga-sh/tamga-java/commit/7ebb95ed8e22e68664c4979e591bab3fce30abbe))
+* pin the strict base64 decoder and correct two overstated claims ([03d8857](https://github.com/tamga-sh/tamga-java/commit/03d8857b08f4cd3f0dcda19cf1b795d0c5358c1a))
+* raise every heartbeat interval clamp to a one-second floor ([1280bfb](https://github.com/tamga-sh/tamga-java/commit/1280bfbf0f57ceca735001e2d30627a929dfdcc3))
+* read machine files the way the server actually writes them ([7c631d3](https://github.com/tamga-sh/tamga-java/commit/7c631d3e48c33908558f64ade586762b5a372d4e))
+* read machine files the way the server actually writes them ([afa5285](https://github.com/tamga-sh/tamga-java/commit/afa5285a2221550be4eb538afbfa11d4bac58a33))
+* record the interval floor and what it costs per window ([94da1f6](https://github.com/tamga-sh/tamga-java/commit/94da1f66fd55d1386ad71346defd391bb9c33781))
+* record why licence-scoped fingerprint recovery is sufficient ([328ce1e](https://github.com/tamga-sh/tamga-java/commit/328ce1e784b9497d42cd222d6079cd5abf865453))
+* reframe the DEAD guidance on the mechanism, and scope the window per route ([518acbf](https://github.com/tamga-sh/tamga-java/commit/518acbf7d85d481ad3894b2d07975f4e0205744c))
+* rename the heartbeat loop tests off the retired DEAD-from-a-ping premise ([01432d2](https://github.com/tamga-sh/tamga-java/commit/01432d2d19386d4d7767bc06bb0abb5c334ff523))
+* snapshot the tick list under its monitor before asserting on it ([22b0a3f](https://github.com/tamga-sh/tamga-java/commit/22b0a3fdb0ee0a007035ddc58a6cc6a559587a38))
+
 ## [1.3.0](https://github.com/tamga-sh/tamga-java/compare/v1.2.2...v1.3.0) (2026-08-20)
 
 
