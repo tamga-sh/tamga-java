@@ -159,6 +159,16 @@ public final class ProcessHeartbeatScheduler implements AutoCloseable {
     }
   }
 
+  /**
+   * Returns the interval this scheduler pings at, after the
+   * {@link HeartbeatScheduler#MINIMUM_INTERVAL} floor and the {@link #DEFAULT_INTERVAL} fallback
+   * have been applied. Package-private so tests can assert the clamp without widening the
+   * published surface for it.
+   */
+  Duration interval() {
+    return interval;
+  }
+
   /** Sends one ping and reports the outcome. Package-private so tests can drive it directly. */
   void tick() {
     Process process = null;
@@ -192,12 +202,21 @@ public final class ProcessHeartbeatScheduler implements AutoCloseable {
     }
 
     /**
-     * Overrides the ping interval. A non-positive value falls back to
-     * {@link #DEFAULT_INTERVAL}.
+     * Overrides the ping interval. A null or non-positive value falls back to
+     * {@link #DEFAULT_INTERVAL}; a positive value below
+     * {@link HeartbeatScheduler#MINIMUM_INTERVAL} is raised to that floor.
+     *
+     * <p>The floor is the machine scheduler's constant rather than one of this class's own, so
+     * the fleet-wide number has a single definition here. It is comfortable against this
+     * scheduler's window either way: 30 seconds is hardcoded server-side, so even the floor
+     * leaves thirty pings inside it. The reason it is needed at all is that
+     * {@link java.util.concurrent.ScheduledExecutorService#scheduleAtFixedRate} honours a period
+     * of {@code 1} exactly -- an explicit sub-second interval here spins
+     * {@code POST /processes/&#123;id&#125;/actions/ping} just as fast as the machine route would.
      */
     public Builder interval(Duration value) {
       this.interval = value == null || value.isNegative() || value.isZero()
-          ? DEFAULT_INTERVAL : value;
+          ? DEFAULT_INTERVAL : HeartbeatScheduler.atLeastMinimumInterval(value);
       return this;
     }
 

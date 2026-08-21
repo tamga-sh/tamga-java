@@ -33,6 +33,11 @@ import sh.tamga.sdk.model.Policy;
  *     .build();
  * }</pre>
  *
+ * <p>Whatever route sets it, the interval is floored at {@link #MINIMUM_INTERVAL}: a window short
+ * enough that a third of it lands under a second yields a one-second ping instead. See that
+ * constant for why the floor is on the ping rate rather than on the periods the timer happens to
+ * reject.
+ *
  * <p>Note it is {@code getLicensePolicy}, not {@code getPolicy}: the standalone policy read wants
  * the {@code policy.read} permission, which a license-key credential does not hold, while the
  * nested one is authorised as a license read and works. Do <em>not</em> try to recover the window
@@ -105,23 +110,73 @@ public final class HeartbeatScheduler implements AutoCloseable {
   public static final Duration DEFAULT_INTERVAL = Duration.ofSeconds(WINDOW.getSeconds() / 3);
 
   /**
+   * The shortest interval this SDK will ever ping at. Anything below it -- set directly through
+   * {@link Builder#interval(Duration)} or derived from a very short window by
+   * {@link #intervalForWindow(Duration)} -- is raised to this value.
+   *
+   * <p><b>Why a floor, and not the narrower non-positive check this replaced.</b> The old guard
+   * rejected null, negative and zero, reasoning from what
+   * {@link java.util.concurrent.ScheduledExecutorService#scheduleAtFixedRate} refuses. Measured on
+   * this SDK's own toolchain, a period of {@code 0} or {@code -1} does throw
+   * {@link IllegalArgumentException} -- and a period of {@code 1} is honoured exactly, at ~1000
+   * pings a second. A rule drawn around what the runtime refuses therefore clamps {@code 0} and
+   * waves {@code 1} through, giving opposite treatment to two inputs that differ only in which one
+   * the executor's argument validation happens to reject. That is a provenance property, not a
+   * safety one. Only a floor bounds the rate.
+   *
+   * <p>The old guard did not even hold its own line. A positive sub-millisecond {@link Duration}
+   * -- {@code Duration.ofNanos(500_000)}, say -- is neither zero nor negative, so it passed; then
+   * {@link Duration#toMillis()} truncated it to {@code 0} and {@link #start()} threw the very
+   * {@link IllegalArgumentException} the guard existed to prevent. The floor closes that hole too.
+   *
+   * <p><b>The floor costs nothing at any window the server can usefully express.</b> The server
+   * judges a machine dead on {@code age_secs <= window_secs} and {@code age_secs} truncates, so
+   * DEAD is first read a whole second past the window. Measured against a one-second-floored ping,
+   * that leaves window 3 with the divisor's full two tolerable consecutive losses, window 2 with
+   * one, and window 1 with none. Steady state still holds every one of them -- it is the loss
+   * budget
+   * that degrades, not the window. Do not restate this as "a 1s window has no slack at a 1s ping":
+   * truncation gives it a full extra second, and the pessimistic reading is what makes this floor
+   * look broken when it is not. Only window {@code 0} cannot be held, and serving it would mean
+   * pinging roughly three times a second to chase a truncation artifact.
+   * {@code SchedulerWindowTest} pins that arithmetic window by window.
+   *
+   * <p>A null, zero or negative value means "unspecified" rather than "too fast", and still falls
+   * back to {@link #DEFAULT_INTERVAL} rather than to this floor.
+   */
+  public static final Duration MINIMUM_INTERVAL = Duration.ofSeconds(1);
+
+  /**
+   * Raises {@code value} to {@link #MINIMUM_INTERVAL} when it falls below it.
+   *
+   * <p>Package-private so {@link ProcessHeartbeatScheduler} shares this one floor instead of
+   * declaring a second that could drift from it.
+   */
+  static Duration atLeastMinimumInterval(Duration value) {
+    return value.compareTo(MINIMUM_INTERVAL) < 0 ? MINIMUM_INTERVAL : value;
+  }
+
+  /**
    * Returns the ping interval for a given server heartbeat window: a third of it, the same ratio
    * {@link #DEFAULT_INTERVAL} applies to {@link #WINDOW}, leaving room for two consecutive failed
    * pings before the window lapses.
    *
    * <p>A null or non-positive window falls back to {@link #DEFAULT_INTERVAL} rather than producing
-   * a zero interval that would busy-loop the timer. Combine with
-   * {@link Policy#effectiveHeartbeatWindow()} -- or use {@link Builder#policy(Policy)}, which does
-   * both.
+   * a zero interval that would busy-loop the timer. A window short enough that a third of it lands
+   * under {@link #MINIMUM_INTERVAL} -- anything below three seconds -- yields that floor instead,
+   * so it is the divisor's two-loss promise that degrades rather than the ping rate that runs
+   * away. Combine with {@link Policy#effectiveHeartbeatWindow()} -- or use
+   * {@link Builder#policy(Policy)}, which does both.
    *
    * @param window the server's effective heartbeat window for the machine
-   * @return a third of {@code window}, or {@link #DEFAULT_INTERVAL} if it is null or non-positive
+   * @return a third of {@code window} but never below {@link #MINIMUM_INTERVAL}, or
+   *     {@link #DEFAULT_INTERVAL} if {@code window} is null or non-positive
    */
   public static Duration intervalForWindow(Duration window) {
     if (window == null || window.isNegative() || window.isZero()) {
       return DEFAULT_INTERVAL;
     }
-    return window.dividedBy(3);
+    return atLeastMinimumInterval(window.dividedBy(3));
   }
 
   private final TamgaClient client;
@@ -206,6 +261,15 @@ public final class HeartbeatScheduler implements AutoCloseable {
   }
 
   /**
+   * Returns the interval this scheduler pings at, after the {@link #MINIMUM_INTERVAL} floor and
+   * the {@link #DEFAULT_INTERVAL} fallback have been applied. Package-private so tests can assert
+   * the clamp without widening the published surface for it.
+   */
+  Duration interval() {
+    return interval;
+  }
+
+  /**
    * Sends one ping and reports the outcome. Package-private so tests can drive it directly.
    *
    * <p>The outcome never gates the next tick, and no status is a stop condition. A ping response
@@ -247,13 +311,15 @@ public final class HeartbeatScheduler implements AutoCloseable {
     }
 
     /**
-     * Overrides the ping interval. A non-positive value falls back to {@link #DEFAULT_INTERVAL}.
-     * Keep it comfortably below the policy's effective window -- {@link #WINDOW} is only the
-     * window a policy gets when it leaves {@code heartbeat_duration} unset.
+     * Overrides the ping interval. A null or non-positive value falls back to
+     * {@link #DEFAULT_INTERVAL}; a positive value below {@link #MINIMUM_INTERVAL} is raised to
+     * that floor, so no caller can schedule a ping loop faster than once a second. Keep it
+     * comfortably below the policy's effective window -- {@link #WINDOW} is only the window a
+     * policy gets when it leaves {@code heartbeat_duration} unset.
      */
     public Builder interval(Duration value) {
       this.interval = value == null || value.isNegative() || value.isZero()
-          ? DEFAULT_INTERVAL : value;
+          ? DEFAULT_INTERVAL : atLeastMinimumInterval(value);
       return this;
     }
 
