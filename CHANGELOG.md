@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.4.1](https://github.com/tamga-sh/tamga-java/compare/v1.4.0...v1.4.1) (2026-08-21)
+
+
+### Bug Fixes
+
+* keep the dependency snippets' version current at release ([8ab7624](https://github.com/tamga-sh/tamga-java/commit/8ab7624eff5c0cf6060da58d88ff032f0601113a))
+* keep the dependency snippets' version current at release ([f109724](https://github.com/tamga-sh/tamga-java/commit/f109724311b8dd90ddef5ea845467844ec858c10))
+
 ## [1.4.0](https://github.com/tamga-sh/tamga-java/compare/v1.3.1...v1.4.0) (2026-08-21)
 
 

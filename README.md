@@ -23,14 +23,14 @@ Temurin 17.
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("sh.tamga:tamga-sdk:1.4.0")
+    implementation("sh.tamga:tamga-sdk:1.4.1")
 }
 ```
 
 ```groovy
 // build.gradle
 dependencies {
-    implementation "sh.tamga:tamga-sdk:1.4.0"
+    implementation "sh.tamga:tamga-sdk:1.4.1"
 }
 ```
 
@@ -39,7 +39,7 @@ dependencies {
 <dependency>
   <groupId>sh.tamga</groupId>
   <artifactId>tamga-sdk</artifactId>
-  <version>1.4.0</version>
+  <version>1.4.1</version>
 </dependency>
 ```
 <!-- x-release-please-end -->
