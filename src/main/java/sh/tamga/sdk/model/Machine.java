@@ -222,6 +222,61 @@ public final class Machine {
     return fromResource(payload.data());
   }
 
+  /**
+   * As {@link #parseResourcePayload(byte[])}, also returning the claims that were signed alongside
+   * the resource.
+   *
+   * <p>Machine files carry the same {@code {"data": ..., "meta": {iat, exp, jti, kid}}} envelope
+   * license files do -- the server builds both from one {@code LicenseFileClaims} struct. Earlier
+   * revisions of this SDK stated machine files carried no claims; they do, and an unread {@code
+   * exp} is an offline file that verifies forever.
+   *
+   * @throws IOException if the payload is malformed, or carries no {@code meta} claims -- i.e. it
+   *     is a pre-v2 file. That is the second line of defence behind the {@code alg} gate: a file
+   *     must not reach the expiry check with nothing to check.
+   */
+  public static MachineWithClaims parseResourcePayloadWithClaims(byte[] json) throws IOException {
+    JsonApiPayload<Attributes> payload =
+        TamgaJsonMapper.instance().readValue(json, new TypeReference<JsonApiPayload<Attributes>>() {
+        });
+    if (payload == null) {
+      throw new IOException("Machine resource payload is empty.");
+    }
+    if (payload.meta() == null) {
+      throw new IOException(
+          "Machine file payload is missing the signed 'meta' claims (this looks like a pre-v2"
+              + " file).");
+    }
+    return new MachineWithClaims(fromResource(payload.data()), payload.meta());
+  }
+
+  /** A machine plus the claims that were covered by its file's signature. */
+  public static final class MachineWithClaims {
+    private final Machine machine;
+    private final LicenseFileClaims claims;
+
+    MachineWithClaims(Machine machine, LicenseFileClaims claims) {
+      this.machine = machine;
+      this.claims = claims;
+    }
+
+    /** The machine the file describes. */
+    public Machine machine() {
+      return machine;
+    }
+
+    /**
+     * The signed {@code iat}/{@code exp}/{@code jti}/{@code kid}.
+     *
+     * <p>GOTCHA: {@code kid} is derived server-side from the account's <em>Ed25519</em> public key
+     * even when the file was signed with RSA or ECDSA, so it does not identify the actual signing
+     * key for those schemes. Do not build key selection on it.
+     */
+    public LicenseFileClaims claims() {
+      return claims;
+    }
+  }
+
   private static Machine fromResource(JsonApiResource<Attributes> resource) throws IOException {
     if (resource == null) {
       throw new IOException("Machine resource payload is missing its data object.");

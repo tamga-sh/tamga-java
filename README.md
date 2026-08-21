@@ -214,13 +214,35 @@ machine.fingerprint();
 machine.heartbeatStatus();
 ```
 
+Like `.lic` files, machine files must be format **v2**: `alg` is `<encoding>+<signing-suffix>+v2`
+(`base64` or `aes-256-gcm`, crossed with `ed25519`, `ecdsa-p256`, `rsa-sha256` or
+`rsa-pss-sha256`), and a file without the `+v2` marker is rejected outright with no fallback. The
+signing suffix is only cross-checked against the scheme you pass; it never selects the verifier.
+
+The signed payload carries `meta` claims (`iat`/`exp`/`jti`/`kid`), and `exp` is enforced with a
+60-second clock-skew tolerance — the same tolerance and the same
+`TamgaCheckoutException.LicenseFileExpiredException` the `.lic` path uses. A checkout made without
+a `ttl` produces a file with no `exp`, which genuinely never expires. Use `verifyWithClaims` to
+read the claims and to supply a trusted timestamp instead of the local clock, which the user
+controls:
+
+```java
+Machine.MachineWithClaims result = file.verifyWithClaims(
+    LicenseScheme.ED25519_SIGN, publicKey, licenseKey, fingerprint, serverUnixSeconds);
+
+result.claims().expiresAt();  // null when the checkout had no ttl
+result.machine().fingerprint();
+```
+
 Supported schemes: `ED25519_SIGN` (and `NONE`, which defaults to Ed25519), `RSA_2048_PKCS1_SIGN`,
 `RSA_2048_PKCS1_PSS_SIGN`, `ECDSA_P256_SIGN`. `RSA_2048_JWT_RS256` throws
 `TamgaCheckoutException.SchemeNotSupportedException` — it is rejected server-side for machine files
 and is deliberately not implemented here.
 
-Ed25519 public keys are raw 32 bytes. RSA and ECDSA public keys are X.509 `SubjectPublicKeyInfo`
-DER.
+Public keys are accepted in whichever encoding the server hands you. Ed25519 is raw 32 bytes.
+ECDSA-P256 is a raw 65-byte uncompressed point (what the account record stores) or X.509
+`SubjectPublicKeyInfo` DER. RSA is PKCS#1 `RSAPublicKey` DER or SPKI — the server emits both for
+the same key from different endpoints.
 
 `MachineFile.validateTtl(int)` mirrors the server's `ttl` bounds (`> 0` and `<= 31536000`, i.e. 365
 days) so a checkout request can fail fast client-side.
@@ -334,8 +356,10 @@ boundaries, not oversights.
 
 **Server-side limitations this SDK inherits**
 
-- **`.machine` files carry no signed expiry.** Only `.lic` files do. A machine file is bounded in
-  practice by the `ttl` requested at checkout and by its fingerprint binding.
+- **`.machine` file expiry is enforced entirely client-side.** The file does carry a signed `exp`
+  (this SDK used to state it did not, and never read it — a machine file consequently verified
+  forever), but the server never re-checks an already-issued offline file, so the `ttl` you
+  requested at checkout is only as binding as the client that reads it.
 - **8 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled for
   forward-compatibility, and `ValidationCode.reachable()` reports which. Do not build behaviour on
   an unreachable one. `ENTITLEMENTS_MISSING` and `FINGERPRINT_SCOPE_MISMATCH` moved into the

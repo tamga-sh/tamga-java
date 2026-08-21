@@ -25,8 +25,9 @@ final class JsonApiPayload<A> {
   }
 
   /**
-   * The claims that were covered by the signature. Present on format-v2 license files; absent on a
-   * pre-v2 file, which is rejected, and on machine files, which carry no claims today.
+   * The claims that were covered by the signature. Present on format-v2 license AND machine files
+   * -- the server builds both from one {@code LicenseFileClaims} struct -- and absent only on a
+   * pre-v2 file, which is rejected.
    */
   LicenseFileClaims meta() {
     return meta;

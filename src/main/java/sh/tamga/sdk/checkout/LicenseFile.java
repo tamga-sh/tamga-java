@@ -57,8 +57,12 @@ public final class LicenseFile {
    * <p>Deliberately small. The client's clock is under the attacker's control, so a generous
    * allowance is just a free extension on every expired file; this covers ordinary NTP drift and
    * nothing more.
+   *
+   * <p>Package-private rather than private so {@link MachineFile} enforces its own {@code exp}
+   * against this exact value. Two constants would eventually drift, and then one of the two file
+   * types would silently carry a different grace period than the other.
    */
-  private static final long CLOCK_SKEW_TOLERANCE_SECONDS = 60L;
+  static final long CLOCK_SKEW_TOLERANCE_SECONDS = 60L;
 
   private final LicenseFileCertificate certificate;
 

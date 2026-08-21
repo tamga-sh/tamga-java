@@ -39,8 +39,25 @@ import sh.tamga.sdk.model.TamgaJsonMapper;
  * that bound client-side so a checkout request can fail fast instead of round-tripping to a
  * {@code 422 TTL_INVALID}.
  *
- * <p>RSA and ECDSA public keys are expected in X.509 {@code SubjectPublicKeyInfo} DER encoding;
- * Ed25519 public keys are raw 32-byte keys, matching {@link LicenseFile}.
+ * <p>Public keys are accepted in whichever encoding the server hands out for the scheme: Ed25519
+ * raw 32 bytes, ECDSA-P256 either a raw 65-byte uncompressed point or X.509 {@code
+ * SubjectPublicKeyInfo} DER, RSA either PKCS#1 {@code RSAPublicKey} DER or SPKI. See {@link
+ * sh.tamga.sdk.crypto.Ecdsa} and {@link sh.tamga.sdk.crypto.Rsa} for which server path emits which.
+ *
+ * <p>{@code alg} is {@code <encoding>+<signing-suffix>+v2} and the {@code +v2} marker is mandatory
+ * -- see {@link MachineFileAlg}. The signing suffix is a cross-check against the caller's scheme,
+ * never a verifier selector.
+ *
+ * <p>An encrypted machine file's {@code enc} is {@code "<nonce_b64>.<ciphertext_b64>"}, NOT the
+ * single {@code base64(nonce||ciphertext||tag)} blob a {@code .lic} file uses -- see {@link
+ * EncryptedPayloadDecryptor}.
+ *
+ * <p>Expiry: the signed payload carries {@code meta.iat}/{@code exp}/{@code jti}/{@code kid} just
+ * as a {@code .lic} file does, and {@link #verifyWithClaims} enforces {@code exp} with the same
+ * 60-second clock-skew tolerance ({@link LicenseFile#CLOCK_SKEW_TOLERANCE_SECONDS}) and raises the
+ * same {@link TamgaCheckoutException.LicenseFileExpiredException}. The {@code ttl}/{@code expiry}
+ * echoed back in the JSON:API checkout envelope are metadata-only and unsigned -- never enforce
+ * against those.
  */
 public final class MachineFile {
 
@@ -96,19 +113,30 @@ public final class MachineFile {
    * {@code scheme} -- NEVER by parsing this file's own {@code alg} string. See type-level remarks
    * for the algorithm-confusion rationale.
    *
+   * <p>The {@code alg} string is still parsed and validated first ({@link MachineFileAlg}): it
+   * must be {@code <encoding>+<signing-suffix>+v2}, its encoding must be one this SDK implements,
+   * and its signing suffix must agree with {@code scheme}. A file without the {@code +v2} marker
+   * is rejected outright -- see {@link MachineFileAlg} for why there is no v1 fallback.
+   *
    * @throws TamgaCheckoutException.SchemeNotSupportedException if {@code scheme} is {@link
    *     LicenseScheme#RSA_2048_JWT_RS256} -- never implemented for machine files.
+   * @throws TamgaCheckoutException.UnsupportedAlgorithmException if {@code alg} is malformed, not
+   *     {@code v2}, or contradicts {@code scheme}.
    */
   public boolean verify(LicenseScheme scheme, byte[] publicKey) {
+    // Up front, before alg is even looked at: the one scheme this SDK refuses to implement.
+    if (scheme == LicenseScheme.RSA_2048_JWT_RS256) {
+      throw new TamgaCheckoutException.SchemeNotSupportedException(
+          "RSA_2048_JWT_RS256 is rejected server-side for machine files (422 "
+              + "SCHEME_NOT_SUPPORTED) and is not implemented client-side either -- this SDK "
+              + "never attempts JWT/RS256 verification.");
+    }
+    MachineFileAlg.parse(certificate.alg, scheme);
+
     byte[] signature = Base64Codec.decodeOrNull(certificate.sig);
     byte[] message = certificate.enc.getBytes(StandardCharsets.UTF_8);
 
     switch (scheme) {
-      case RSA_2048_JWT_RS256:
-        throw new TamgaCheckoutException.SchemeNotSupportedException(
-            "RSA_2048_JWT_RS256 is rejected server-side for machine files (422 "
-                + "SCHEME_NOT_SUPPORTED) and is not implemented client-side either -- this SDK "
-                + "never attempts JWT/RS256 verification.");
       case NONE:
       case ED25519_SIGN:
         return signature != null && Ed25519.verify(publicKey, message, signature);
@@ -127,7 +155,12 @@ public final class MachineFile {
   /**
    * Full verify pipeline: verifies the signature (fails closed), then decrypts (if {@code alg}
    * indicates AES-256-GCM, using the HKDF-derived key -- see {@code Hkdf}) or plain-decodes the
-   * {@code enc} payload, and parses the embedded {@code {"data": <MachineResource>}} JSON.
+   * {@code enc} payload, parses the embedded {@code {"data": <MachineResource>, "meta": {...}}}
+   * JSON, and enforces the signed {@code exp} claim against the local clock.
+   *
+   * <p>Uses {@link System#currentTimeMillis()}. An application that holds a server-supplied
+   * timestamp should call {@link #verifyWithClaims} instead -- the local clock is under the user's
+   * control, and winding it back is the obvious way to revive an expired file.
    *
    * @param scheme the license's signing scheme -- drives verifier dispatch, see type-level
    *     remarks.
@@ -135,44 +168,68 @@ public final class MachineFile {
    * @param fingerprint the target machine's fingerprint -- HKDF {@code info} for an encrypted
    *     file. Decryption fails closed (AES-GCM auth failure) if this doesn't match the machine
    *     the file was issued for.
+   * @throws TamgaCheckoutException.LicenseFileExpiredException if the file's signed {@code exp}
+   *     has passed -- the same distinct outcome the {@code .lic} path uses, so a caller can tell
+   *     "expired, fetch a fresh one" from "forged or corrupt".
    */
   public Machine verifyAndDecrypt(LicenseScheme scheme, byte[] publicKey, String licenseKey,
       String fingerprint) {
+    return verifyWithClaims(scheme, publicKey, licenseKey, fingerprint,
+        System.currentTimeMillis() / 1000L).machine();
+  }
+
+  /**
+   * As {@link #verifyAndDecrypt}, also returning the signed claims and taking the current time
+   * from the caller.
+   *
+   * <p>Two uses for {@code nowUnixSeconds}, both mirroring {@link LicenseFile#verifyWithClaims}.
+   * Tests get determinism. And an application that keeps a server-supplied timestamp -- the
+   * recommended defence against a user winding the system clock back to revive an expired file --
+   * can pass that instead of trusting the local clock.
+   *
+   * <p>Expiry is enforced either way; it is not opt-in. A file whose checkout carried no {@code
+   * ttl} has no {@code exp} at all and genuinely never expires -- that absence is legitimate, not
+   * an error.
+   *
+   * <p>Order is load-bearing: signature first, over the {@code enc} string exactly as it appears
+   * in the certificate, and only then any decode, split or decrypt. Nothing attacker-controlled
+   * gets parsed before it has been authenticated.
+   */
+  public Machine.MachineWithClaims verifyWithClaims(LicenseScheme scheme, byte[] publicKey,
+      String licenseKey, String fingerprint, long nowUnixSeconds) {
     if (!verify(scheme, publicKey)) {
       throw new TamgaCheckoutException.SignatureVerificationException();
     }
 
-    byte[] payloadBytes =
-        Base64Codec.decodeOrThrow(certificate.enc, "Machine file 'enc' is not valid base64.");
+    // Already validated by verify() above; re-parsed here only to read the encoding prefix.
+    MachineFileAlg alg = MachineFileAlg.parse(certificate.alg, scheme);
 
-    // Substring matching, NOT exact equality, is intentional and required here -- unlike
-    // LicenseFile's fixed 2-literal alg space, MachineFile's alg is a compound
-    // encryption-prefix + signature-suffix string across 5 possible schemes (e.g.
-    // "aes-256-gcm+ed25519", "rsa-sha256", "ecdsa-sha256"), so there is no single fixed literal
-    // set to match exactly. alg is never used for signature-scheme dispatch (see verify above)
-    // -- only for this encrypted-vs-plain payload gating.
-    // BUGFIX (found by independent review): only "aes-256-gcm" reliably identifies an encrypted
-    // payload. A plain (unencrypted) non-Ed25519 file's alg is just its signature suffix (e.g.
-    // "rsa-sha256", "ecdsa-sha256") with no "base64" substring at all, so a previous
-    // `else if (contains("base64"))` gate incorrectly fell through to the unsupported-algorithm
-    // branch and rejected legitimately-signed plain RSA/ECDSA machine files. Treating "not
-    // aes-256-gcm" as "plain" is security-neutral: alg is already unauthenticated (only `enc` is
-    // covered by the signature verified above), and both branches fail closed regardless -- an
-    // encrypted payload misread as plain fails JSON parsing (ciphertext is not valid JSON), and a
-    // plain payload misread as encrypted fails the AES-GCM authentication tag check.
     byte[] jsonBytes;
-    if (certificate.alg.contains("aes-256-gcm")) {
+    if (alg.isEncrypted()) {
       byte[] key = Hkdf.deriveMachineFileKey(licenseKey, fingerprint);
-      jsonBytes = EncryptedPayloadDecryptor.decrypt(payloadBytes, key, "Encrypted machine file");
+      jsonBytes = EncryptedPayloadDecryptor.decryptDotSeparated(certificate.enc, key,
+          "Encrypted machine file");
     } else {
-      jsonBytes = payloadBytes;
+      jsonBytes =
+          Base64Codec.decodeOrThrow(certificate.enc, "Machine file 'enc' is not valid base64.");
     }
 
+    Machine.MachineWithClaims result;
     try {
-      return Machine.parseResourcePayload(jsonBytes);
+      result = Machine.parseResourcePayloadWithClaims(jsonBytes);
     } catch (IOException e) {
       throw new TamgaCheckoutException.OfflineFileFormatException(
           "Machine file payload JSON is malformed: " + e.getMessage(), e);
     }
+
+    // The signature proves the file is authentic. It does not prove it is still valid -- that is
+    // this check, and skipping it is what made a checked-out machine permanent.
+    Long expiresAt = result.claims().expiresAt();
+    if (expiresAt != null
+        && nowUnixSeconds - LicenseFile.CLOCK_SKEW_TOLERANCE_SECONDS > expiresAt) {
+      throw new TamgaCheckoutException.LicenseFileExpiredException(expiresAt);
+    }
+
+    return result;
   }
 }

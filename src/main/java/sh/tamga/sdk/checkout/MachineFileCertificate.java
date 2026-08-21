@@ -10,18 +10,20 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 final class MachineFileCertificate {
 
   /**
-   * The payload: base64-encoded AES-256-GCM ciphertext (encrypted files) or plain base64-encoded
-   * JSON (unencrypted files).
+   * The payload: {@code "<nonce_b64>.<ciphertext_b64>"} for an encrypted file (two independently
+   * base64-encoded halves, unlike a {@code .lic} file's single blob), or plain base64-encoded JSON
+   * for an unencrypted one.
    */
   final String enc;
 
-  /** The signature over {@link #enc}'s base64 string bytes, base64-encoded. */
+  /** The signature over {@link #enc}'s string bytes -- the string itself, not its decoding. */
   final String sig;
 
   /**
-   * The algorithm identifier reported by the server (e.g. contains {@code "aes-256-gcm"} and/or
-   * a signature-scheme suffix like {@code "rsa-sha256"}). NEVER used to select the verifier --
-   * see {@link MachineFile}'s type-level remarks.
+   * The algorithm identifier: {@code <encoding>+<signing-suffix>+v2}, e.g. {@code
+   * "aes-256-gcm+rsa-pss-sha256+v2"}. Parsed and version-gated by {@link MachineFileAlg}, and
+   * cross-checked against the caller's scheme -- but NEVER used to select the verifier, see {@link
+   * MachineFile}'s type-level remarks. It is outside the signature, so it is attacker-editable.
    */
   final String alg;
 

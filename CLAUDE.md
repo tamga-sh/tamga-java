@@ -17,8 +17,8 @@ documentation.
 PKCS1/PSS), `checkout/` (`LicenseFile`, `MachineFile`), `proof/` (`OfflineProof` +
 `CanonicalJson`), and the HTTP surface (`TamgaClient`'s 20 endpoint methods, `Transport`,
 `AuthTransport`'s seven forms, the JSON:API error model, the entitlement cache, both heartbeat
-schedulers, and the full `Policy`/`ValidationCode` types) are all implemented and tested — 235
-tests, ~90% instruction coverage against an 80% gate.
+schedulers, and the full `Policy`/`ValidationCode` types) are all implemented and tested — 405
+tests, ~97% instruction coverage against an 80% gate.
 
 The normative description of the network surface is
 `../docs/api-client-contract.md`, derived from `tamga-go`. Behavioural changes to
@@ -321,10 +321,46 @@ source doc for the full set, including analytics/EE items that don't touch this 
   decoded bytes.** This is the single most common implementation bug across every Tamga SDK. See
   the `CRITICAL:` note in `checkout/LicenseFile.java`'s Javadoc and the call site in `verify`, and
   `LicenseFileTest`'s dedicated regression signing the decoded bytes to confirm it fails.
+- **Offline machine files must be format v2 as well, and they DO carry signed claims.** Earlier
+  revisions of this file and of the SDK stated the opposite; both were wrong, and the consequence
+  was that a checked-out machine verified forever. `alg` is `<encoding>+<signing-suffix>+v2`
+  (`base64`/`aes-256-gcm` × `ed25519`/`ecdsa-p256`/`rsa-sha256`/`rsa-pss-sha256`), parsed
+  structurally by `checkout/MachineFileAlg` — split the encoding at the FIRST `+` and the version
+  at the LAST, because both halves contain hyphens. A substring `contains()` test is not a parse:
+  it accepts `base64+ed25519+v3` and `xbase64+ed25519+v2junk` too, which is how this SDK "passed"
+  the v2 gate without ever checking for it. The signed payload carries the same
+  `meta` claims a `.lic` file does and `MachineFile.verifyWithClaims` enforces `exp` with the SAME
+  constant, `LicenseFile.CLOCK_SKEW_TOLERANCE_SECONDS` — never define a second one — raising the
+  same `LicenseFileExpiredException`. A TTL-less checkout legitimately has no `exp`.
+- **An encrypted `.machine` file's `enc` is `"<nonce_b64>.<ciphertext_b64>"` — two independently
+  base64-encoded halves.** An encrypted `.lic` file's is a single `base64(nonce‖ciphertext‖tag)`
+  blob. Same PEM envelope, same `{enc, sig, alg}` shape, same `aes-256-gcm+…+v2` prefix, genuinely
+  different framing: the server builds them through different functions. The doc comment on
+  `machine_file.rs`'s own encoder still describes the single-blob form and is stale, which is what
+  led all eight SDKs in this fleet to implement it that way. Branch on the encoding prefix from
+  `alg`, never on whether a dot happens to be present, and never decode any of it before the
+  signature over the whole `enc` STRING has verified.
+- **The server does not distribute ECDSA or RSA public keys as X.509 SPKI.** `key_material.rs`
+  stores the ECDSA key as a raw 65-byte SEC1 uncompressed point, and `license_signing.rs`'s
+  `extract_public_key` returns RSA as PKCS#1 `RSAPublicKey` DER while the account column holds
+  SPKI. `Ecdsa`/`Rsa` accept both encodings per algorithm; an SPKI-only verifier could not consume
+  a real account key at all. The P-256 curve pin and the exact-2048-bit modulus check apply on
+  every path.
 - **`RSA_2048_JWT_RS256` is rejected for machine files.** `MachineFile.verify` throws
-  `TamgaCheckoutException.SchemeNotSupportedException` before attempting any verification for this
-  scheme, matching the server's `422 SCHEME_NOT_SUPPORTED` — no JWT verification path exists or
-  should be added.
+  `TamgaCheckoutException.SchemeNotSupportedException` before attempting any verification — and
+  before `alg` is even parsed — matching the server's `422 SCHEME_NOT_SUPPORTED`. No JWT
+  verification path exists or should be added. The server emits the identical `rsa-sha256` suffix
+  for this scheme and for `RSA_2048_PKCS1_SIGN`, so `alg` cannot identify the scheme even in
+  principle; the caller's `LicenseScheme` is authoritative and `alg` is only ever a cross-check.
+- **Machine-file tests must use server-produced fixtures.** `src/test/resources/machine-file-fixtures/`
+  holds 12 files (4 schemes × plain/encrypted/expired) emitted by the server's own
+  `encode_machine_file`, driven by `manifest.json` through `support/MachineFixtures` and
+  `MachineFileFixtureTest`'s `@ParameterizedTest` — iterate the manifest, never hardcode names.
+  Do not regenerate them from this repo: a self-encoded fixture reproduces whatever this repo
+  believes the format to be, which is exactly how the three bugs above survived. `CheckoutFixture`
+  remains fine for wiring/edge cases but is not evidence about the wire format. Note the valid
+  fixtures carry a real one-hour `ttl`, so never let the wall clock reach `verifyWithClaims` for
+  one — pass a timestamp derived from the file's own `exp`.
 - **Offline-proof field order is load-bearing.** The RSA signature in `proof/OfflineProof.java`
   covers a specific server-produced key order, recursively alphabetical at every nesting level
   (matching `serde_json`'s `BTreeMap`-backed output) — NOT literal source/insertion order. See
