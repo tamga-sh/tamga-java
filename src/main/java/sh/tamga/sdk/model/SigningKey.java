@@ -17,7 +17,7 @@ import java.util.Objects;
  * <p>Two things about this resource are easy to get wrong.
  *
  * <p><b>The resource {@code id} IS the {@code kid}.</b> It is not a UUID like every other resource
- * this SDK decodes: the server sets {@code id: k.kid} ({@code accounts/serializer.rs:119-122}),
+ * this SDK decodes: the server sets {@code id: k.kid} ({@code accounts/serializer.rs:123}),
  * the same value it writes into the file's claim, with its own comment reading "The {@code kid}
  * doubles as the resource id -- it is what an offline file names." So matching a file to its key
  * needs no local hashing at all on this path. {@link sh.tamga.sdk.crypto.Ed25519#keyId(String)}
@@ -26,7 +26,7 @@ import java.util.Objects;
  *
  * <p><b>{@code publicKey} is camelCase inside an otherwise snake_case attribute bag.</b> The
  * server's {@code SigningKeyAttributes} carries no {@code rename_all}; the single field rename on
- * {@code public_key} ({@code accounts/serializer.rs:110-111}) is the only exception, and {@code
+ * {@code public_key} ({@code accounts/serializer.rs:111-112}) is the only exception, and {@code
  * algorithm}, {@code status}, {@code created} and {@code retired} are all bare. Reading {@code
  * public_key} here yields {@code null} and nothing else complains -- the same trap the {@link
  * Release} resource sets from the opposite direction.

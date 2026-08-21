@@ -54,7 +54,7 @@ class SigningKeySetTest {
 
   @Test
   void fetchedKeySetTakesTheKeyIdFromTheResourceIdNotFromLocalHash() throws IOException {
-    // The server's `id` IS the kid (accounts/serializer.rs:119-122): nothing is hashed on this
+    // The server's `id` IS the kid (accounts/serializer.rs:123, documented at :103): nothing is
     // path, and indexing by a locally computed value instead would silently disagree with the
     // server the moment the two ever differ.
     SigningKeySet set = SigningKeySet.of(
@@ -66,15 +66,30 @@ class SigningKeySetTest {
 
   @Test
   void servedKeyIdThatDisagreesWithTheLocalComputationIsReportedNotHidden() throws IOException {
-    // The local computation is a cross-check. A mismatch is a server-side fault no client can fix,
-    // so it is surfaced -- and lookup still accepts BOTH spellings, so a mislabelled key keeps
-    // verifying the files it really signed instead of being reported as a forgery.
+    // The local computation is a cross-check, and a mismatch is a server-side fault no client can
+    // fix -- so it is surfaced as its own condition rather than absorbed by a fallback lookup.
+    // Matching the computed id as a second spelling would invent a rule the wire does not have and
+    // hide exactly the signal an operator needs.
     SigningKeySet set = SigningKeySet.of(
         Collections.singletonList(resource("deadbeefdeadbeef", "ed25519", ZERO_KEY, "active")));
 
     assertThat(set.mismatchedKeyIds()).containsExactly("deadbeefdeadbeef");
     assertThat(set.contains("deadbeefdeadbeef")).isTrue();
-    assertThat(set.contains(Ed25519.keyId(ZERO_KEY))).isTrue();
+    // The SERVED id only: the file's kid is drawn from the same column this id comes from.
+    assertThat(set.contains(Ed25519.keyId(ZERO_KEY))).isFalse();
+  }
+
+  @Test
+  void mislabelledKeyStillVerifiesItsOwnFilesDespiteTheStrictLookup() throws IOException {
+    // What the strict rule does NOT cost. Keys are tried against the signature before any id is
+    // consulted, so the served-id rule only decides which error a file that verified under no key
+    // reports -- it never decides whether a genuine file verifies.
+    SigningKeySet set = SigningKeySet.of(
+        Collections.singletonList(resource("deadbeefdeadbeef", "ed25519", ZERO_KEY, "active")));
+
+    assertThat(set.entries()).hasSize(1);
+    assertThat(set.find("deadbeefdeadbeef").publicKey())
+        .isEqualTo(java.util.Base64.getDecoder().decode(ZERO_KEY));
   }
 
   @Test

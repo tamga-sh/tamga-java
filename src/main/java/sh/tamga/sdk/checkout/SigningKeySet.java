@@ -175,11 +175,16 @@ public final class SigningKeySet {
    * The ids of keys whose published id does not match the one computed locally from their public
    * key.
    *
-   * <p>Always empty against a correct server, and worth reporting upstream if it ever is not --
-   * it means the account published a key under an id that is not the {@link
-   * Ed25519#keyId(String)} of its own public key, which no client can fix. Lookup accepts either
-   * spelling for exactly that reason, so a mislabelled key still verifies the files it signed
-   * rather than being reported as a forgery.
+   * <p>Always empty against a correct server, and worth reporting upstream if it ever is not: it
+   * means the account published a key under an id that is not the {@link Ed25519#keyId(String)} of
+   * its own public key, which no client can fix.
+   *
+   * <p><b>This is a reportable condition, not a second lookup path.</b> {@link #contains} matches
+   * the served id alone -- the id the file's own {@code kid} is drawn from -- so a mislabelled key
+   * is surfaced here rather than silently absorbed by a fallback that would hide it. Note what
+   * this does and does not cost: keys are tried against the signature before any id is consulted
+   * (see {@link SigningKeySelection}), so a mislabelled key still verifies its own files normally.
+   * The served-id rule only decides which error a file that verified under NO key reports.
    */
   public List<String> mismatchedKeyIds() {
     return mismatchedKeyIds;
@@ -217,7 +222,12 @@ public final class SigningKeySet {
       return null;
     }
     for (Entry entry : entries) {
-      if (keyId.equals(entry.key.keyId()) || keyId.equals(entry.computedKeyId)) {
+      // The SERVED id only. The file's own kid and this id are both key_id() of the same stored
+      // public key, so a disagreement means the server's metadata is wrong -- and matching the
+      // locally computed id as a second spelling would invent a rule the wire does not have and
+      // quietly absorb the very signal that says so. The disagreement is reported instead, by
+      // mismatchedKeyIds(). Fleet-wide rule, matching tamga-rust and tamga-dotnet.
+      if (keyId.equals(entry.key.keyId())) {
         return entry;
       }
     }

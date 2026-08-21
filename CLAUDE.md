@@ -442,10 +442,15 @@ source doc for the full set, including analytics/EE items that don't touch this 
   — 16 characters, over the stored string and never the 32 decoded bytes, the same trap as the
   signature covering `enc`'s base64 string (`Ed25519.keyId`, pinned by `Ed25519KeyIdTest` against
   vectors this repo did not generate, including a negative case for the decode-first answer).
-  `GET /v1/accounts/{id}/signing-keys` serves that id as the resource **`id`**, so
-  `SigningKeySet.of` indexes by what the server sent and computes the id only as a cross-check
-  (`mismatchedKeyIds()`); lookup accepts either spelling so a mislabelled key still verifies its
-  own files. Three consequences that are easy to get wrong:
+  `GET /v1/accounts/{id}/signing-keys` serves that id as the resource **`id`**
+  (`accounts/serializer.rs:123`, documented at `:103`), so `SigningKeySet.of` indexes by what the
+  server sent and computes the id only as a cross-check. ⚠️ Lookup matches the **served id alone**
+  — a fleet-wide rule shared with tamga-rust and tamga-dotnet. A served/computed disagreement is
+  its own reportable condition (`mismatchedKeyIds()`), never a fallback lookup: matching the
+  computed id as a second spelling would invent a rule the wire does not have and absorb the one
+  signal that says the server's metadata is wrong. It costs nothing, because keys are tried against
+  the signature before any id is consulted — the rule only decides which error a file that verified
+  under no key reports. Three consequences that are easy to get wrong:
   (1) `check_out_machine.rs:86-99` picks the *signing* key by scheme but `:127` derives the `kid`
   from `account.ed25519_public_key` **unconditionally**, so an RSA/ECDSA machine file names a key
   that cannot verify it — `MachineFile`'s key-set path therefore refuses any suffix but `ed25519`
