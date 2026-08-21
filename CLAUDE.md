@@ -281,7 +281,7 @@ source doc for the full set, including analytics/EE items that don't touch this 
   bounds the cull job and not the ping endpoint. Stopping, returning or short-circuiting the loop
   on a status is what strands the machine (tamga-python shipped exactly that bug).
   `HeartbeatScheduler` never gates a tick on the previous outcome, and
-  `HeartbeatSchedulerTest.schedulerKeepsPingingAcrossConsecutiveDeadReadings` pins that.
+  `HeartbeatSchedulerTest.noHeartbeatStatusEndsTheLoopNotEvenDead` pins that.
 - **A ping response can never report `DEAD` (M42).** Two directives have now been wrong here in
   opposite directions, so state the mechanism, not a scenario. The original ("DEAD means the row
   was culled, so re-activate instead of pinging") was false and was reversed. Its replacement kept

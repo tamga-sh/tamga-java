@@ -92,7 +92,7 @@ class HeartbeatSchedulerTest {
   }
 
   @Test
-  void deadReadingIsNotAnErrorAndStillCarriesTheMachine() {
+  void unexpectedStatusIsCarriedNotRaisedAsError() {
     // Synthetic status: the real ping-heartbeat endpoint cannot answer DEAD, since it writes
     // last_heartbeat_at = NOW() before deriving the status from that same timestamp. What this
     // pins is the routing rule, which is real: any 200 carrying a machine leaves `error` null
@@ -115,7 +115,7 @@ class HeartbeatSchedulerTest {
   }
 
   @Test
-  void schedulerKeepsPingingAcrossConsecutiveDeadReadings() throws Exception {
+  void noHeartbeatStatusEndsTheLoopNotEvenDead() throws Exception {
     // Regression: the loop must not stop on any status. DEAD stands in here for an unexpected
     // status -- the real ping-heartbeat endpoint cannot produce it, because it writes
     // last_heartbeat_at = NOW() and then derives the status from that same timestamp, so it
