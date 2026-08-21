@@ -173,14 +173,21 @@ The route's own default is a `303 See Other` to that URL, which this SDK never t
 `?redirect=false` and hands you the URL instead, and the client it builds refuses redirects
 outright. Two measured reasons, either one sufficient:
 
-- **Credentials survive the hop, and how far depends on the server's storage configuration.**
-  Probed against okhttp 5.4.0: on a *cross-origin* redirect OkHttp strips `Authorization` but
-  replays a `Cookie` header set directly on the request — which is how the session-cookie transport
-  sends its credential. On a *same-origin* redirect it carries both, licence key included, and a
-  server with an `s3_endpoint` and path-style addressing serves storage from the API's own origin.
+- **Credentials survive the hop, and which one depends on the origin.** Probed against okhttp
+  5.4.0 with both credential kinds on one request: on a *cross-origin* redirect OkHttp strips
+  `Authorization` — where bearer, basic and licence-key auth all live — but replays a `Cookie`
+  header set directly on the request, which is how the session-cookie transport sends its
+  credential. On a *same-origin* redirect it carries both, licence key included, and a server with
+  an `s3_endpoint` and path-style addressing serves storage from the API's own origin. This is
+  OkHttp's behaviour, not a portable one.
 - **Following it buffers the file.** The redirect target is the artifact itself, and the transport
   reads responses into memory under a 32 MiB ceiling while the server accepts uploads up to 1 GiB.
   This one holds regardless of where storage lives.
+
+`redirectUrl` is checked before you get it: absent, relative, or carrying any scheme but
+`http`/`https`, it is refused with a `TamgaTransportException` rather than returned. The server
+chooses that value and you would hand it straight to an HTTP client, so "it parsed" is not the test
+that matters.
 
 A `403` here is not necessarily a credential problem: the handler enforces the owning release's
 read gate as well as the `artifact.download` permission, so a product on the `CLOSED` distribution

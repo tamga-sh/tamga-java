@@ -14,6 +14,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import sh.tamga.sdk.error.TamgaApiException;
+import sh.tamga.sdk.error.TamgaTransportException;
 import sh.tamga.sdk.model.Artifact;
 import sh.tamga.sdk.model.ListOptions;
 import sh.tamga.sdk.model.Page;
@@ -295,6 +296,65 @@ class ArtifactEndpointTest {
     assertThatThrownBy(() -> client.requestArtifactDownload("art-1"))
         .isInstanceOf(TamgaApiException.ForbiddenException.class)
         .hasMessageContaining("admins, developers, and product tokens");
+  }
+
+  @Test
+  void downloadUrlsWithNonHttpSchemesAreRefusedRatherThanHandedBack() {
+    // redirectUrl is chosen by the server and handed straight to whatever HTTP client the
+    // application uses, so "it parsed" is not the test that matters. HttpUrl.parse answers the
+    // right question -- measured: it returns null for file:, ftp:, jar:, javascript:, a relative
+    // path and a Windows path, and accepts HTTPS: case-insensitively.
+    for (String hostile : new String[] {"file:///etc/passwd", "ftp://h/f", "jar:file:///x!/y",
+        "javascript:alert(1)", "/relative/path"}) {
+      enqueueJson("{\"data\":" + artifactResource("art-1", hostile) + "}");
+
+      assertThatThrownBy(() -> client.requestArtifactDownload("art-1"))
+          .as(hostile)
+          .isInstanceOf(TamgaTransportException.class)
+          .hasMessageContaining("not an http or https URL");
+    }
+  }
+
+  @Test
+  void uppercaseHttpsSchemesAreStillHttpsUrls() {
+    enqueueJson("{\"data\":" + artifactResource("art-1", "HTTPS://storage.example/o") + "}");
+
+    assertThat(client.requestArtifactDownload("art-1").redirectUrl())
+        .isEqualTo("HTTPS://storage.example/o");
+  }
+
+  @Test
+  void downloadAnsweringWithoutAnyUrlIsAnErrorNotSilentNull() {
+    // Sending redirect=false is precisely what asks for the URL in the body, so a response without
+    // one is not something a caller can act on -- and returning null would look like the read
+    // routes, where absence is normal.
+    enqueueJson("{\"data\":" + artifactResource("art-1", null) + "}");
+
+    assertThatThrownBy(() -> client.requestArtifactDownload("art-1"))
+        .isInstanceOf(TamgaTransportException.class)
+        .hasMessageContaining("without a redirectUrl");
+  }
+
+  @Test
+  void downloadAnsweringWithNoResourceAtAllIsAnError() {
+    enqueueJson("{\"data\":null}");
+
+    assertThatThrownBy(() -> client.requestArtifactDownload("art-1"))
+        .isInstanceOf(TamgaTransportException.class)
+        .hasMessageContaining("no artifact resource");
+  }
+
+  @Test
+  void refusedDownloadUrlsAreNotEchoedIntoTheMessage() {
+    // A presigned URL carries its whole authorisation in the query string. A rejected one is still
+    // a URL somebody chose, and a message that quotes it lands in a log.
+    enqueueJson("{\"data\":"
+        + artifactResource("art-1", "ftp://storage.example/o?sig=SECRET") + "}");
+
+    assertThatThrownBy(() -> client.requestArtifactDownload("art-1"))
+        .isInstanceOf(TamgaTransportException.class)
+        .hasMessageNotContaining("SECRET")
+        .hasMessageContaining("scheme: ftp");
   }
 
   @Test

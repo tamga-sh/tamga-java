@@ -162,7 +162,15 @@ source doc for the full set, including analytics/EE items that don't touch this 
     the artifact, and `Transport` caps a response at 32 MiB while the server accepts 1 GiB uploads.
     The `OkHttpClient` this SDK builds also refuses redirects outright, so the `303` would surface
     as an error rather than being followed, but a caller supplying their own client opts out of
-    that.
+    that. Both behaviours are OkHttp's own and not portable — the same probe across this fleet's
+    runtimes produced three different answers, so do not carry this finding to another port
+    without re-measuring it there.
+  - **`redirectUrl` is server-chosen input, so it is validated before being handed back.** Absent,
+    relative, or any scheme but `http`/`https` (`file:` being the obvious one) is refused with
+    `TamgaTransportException`. `HttpUrl.parse` is the check: measured to return null for `file:`,
+    `ftp:`, `jar:`, `javascript:`, a relative path and a Windows path, while accepting the scheme
+    case-insensitively. "It parsed" is a weaker test than "it is an HTTP URL" and several of this
+    fleet's ports had only the former.
   - **A bad `ttl` answers `422 PRESIGN_TTL_INVALID`, not `TTL_INVALID`** (`artifacts/service.rs:33`
     vs `check_out_license.rs:48`). The prefix matters: `TamgaApiException.TtlInvalidException` is
     keyed on the unprefixed code, so the download's version does **not** land there. The client

@@ -1009,13 +1009,17 @@ public final class TamgaClient {
    * both measured rather than assumed:
    *
    * <ul>
-   *   <li><b>Credentials follow the redirect, and how far depends on configuration.</b> Probed
-   *       against okhttp 5.4.0 with a two-server harness: on a <em>cross-origin</em> redirect
-   *       OkHttp strips {@code Authorization} but replays a {@code Cookie} header set directly on
-   *       the request -- which is exactly how {@code AuthTransport.sessionCookie} sends its
-   *       credential. On a <em>same-origin</em> redirect it carries both intact, licence key
-   *       included. Same-origin is not hypothetical: a server configured with an {@code
-   *       s3_endpoint} and path-style addressing serves storage from the API's own origin.
+   *   <li><b>Credentials follow the redirect, and which one depends on the origin.</b> Probed
+   *       against okhttp 5.4.0 with a two-server harness, both credential kinds this SDK issues on
+   *       the same request, and the first leg asserted so "absent" means stripped rather than
+   *       never sent. On a <em>cross-origin</em> redirect OkHttp strips {@code Authorization} --
+   *       where the bearer, basic and licence-key transports all put their credential -- but
+   *       replays a {@code Cookie} header set directly on the request, which is exactly how
+   *       {@code AuthTransport.sessionCookie} sends its own. On a <em>same-origin</em> redirect it
+   *       carries both intact, licence key included. Same-origin is not hypothetical: a server
+   *       configured with an {@code s3_endpoint} and path-style addressing serves storage from the
+   *       API's own origin. Note this is OkHttp's behaviour and not a portable one -- the same
+   *       probe on other runtimes in this fleet produced three different answers.
    *   <li><b>Following it buffers the artifact.</b> The redirect target is the file, and
    *       {@link Transport} reads a response into memory under a 32 MiB ceiling. An artifact
    *       routinely exceeds that -- the server accepts uploads up to 1 GiB -- so a followed
@@ -1027,6 +1031,11 @@ public final class TamgaClient {
    * ({@code followRedirects(false)}), so the default {@code 303} surfaces as an error rather than
    * being followed -- but a caller who supplies their own {@link OkHttpClient} opts out of that
    * protection, and {@code ?redirect=false} keeps this call correct for them too.
+   *
+   * <p>The URL that comes back is checked before it is handed over: absent, relative, or carrying
+   * any scheme but {@code http}/{@code https}, it is refused with a
+   * {@link sh.tamga.sdk.error.TamgaTransportException} rather than returned. It is chosen by the
+   * server, not by the caller, and goes straight to an HTTP client that would act on it.
    *
    * <p><b>A {@code 403} here is not necessarily an auth misconfiguration.</b> The handler enforces
    * the owning release's read gate as well as the {@code artifact.download} permission
@@ -1070,7 +1079,42 @@ public final class TamgaClient {
     }
     JsonNode root = transport.getJson(
         Arrays.asList("artifacts", artifactId, "actions", "download"), query);
-    return Artifact.fromResourceNode(root.get("data"));
+    Artifact artifact = Artifact.fromResourceNode(root.get("data"));
+    if (artifact == null) {
+      throw new TamgaTransportException(
+          "The artifact download action answered with no artifact resource.");
+    }
+    requireFetchableUrl(artifact.redirectUrl());
+    return artifact;
+  }
+
+  /**
+   * Refuses a download URL this SDK would not itself be willing to fetch.
+   *
+   * <p>The URL is chosen by the server, not by the caller, and it is handed straight to whatever
+   * HTTP client the application uses. A value that is absent, relative, or carries a scheme other
+   * than {@code http}/{@code https} -- {@code file:} being the obvious one -- would point that
+   * client somewhere it was never meant to go, and "it parsed" is not the same test as "it is an
+   * HTTP URL". {@link HttpUrl#parse} answers exactly the right question: it returns null for every
+   * non-HTTP scheme, for a relative path and for a Windows path, and accepts the scheme
+   * case-insensitively.
+   *
+   * <p>The rejected value is not echoed into the message. A presigned URL carries its
+   * authorisation in the query string, and a message that quotes one lands in a log.
+   */
+  private static void requireFetchableUrl(String redirectUrl) {
+    if (redirectUrl == null || redirectUrl.isEmpty()) {
+      throw new TamgaTransportException("The artifact download action answered without a"
+          + " redirectUrl. Sending redirect=false is what asks for one, so a response missing it"
+          + " is not something a caller can act on.");
+    }
+    if (HttpUrl.parse(redirectUrl) == null) {
+      int colon = redirectUrl.indexOf(':');
+      String scheme = colon > 0 ? redirectUrl.substring(0, colon) : "none";
+      throw new TamgaTransportException("The artifact download action answered with a redirectUrl"
+          + " that is not an http or https URL (scheme: " + scheme + "). Refusing to hand it back"
+          + " rather than letting it reach an HTTP client that might follow it.");
+    }
   }
 
   // -------------------------------------------------------------- diagnostics
