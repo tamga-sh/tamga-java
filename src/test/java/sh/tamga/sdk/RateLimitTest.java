@@ -14,6 +14,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import sh.tamga.sdk.error.TamgaApiException;
 import sh.tamga.sdk.model.CreateMachineOptions;
+import sh.tamga.sdk.model.RateLimitInfo;
 
 /**
  * Rate-limit retry policy.
@@ -119,6 +120,48 @@ class RateLimitTest {
     // A streamed body would have been consumed by the first attempt, leaving the retry to send
     // an empty payload that the server would reject for an entirely unrelated reason.
     assertThat(retriedBody).contains("SECRET-KEY");
+  }
+
+  @Test
+  void anExhaustedBudgetSurfacesTheServersRateLimitHeaders() {
+    for (int i = 0; i < 3; i++) {
+      server.enqueue(new MockResponse.Builder()
+          .code(429)
+          .addHeader("Retry-After", "0")
+          .addHeader("x-ratelimit-limit", "100")
+          .addHeader("x-ratelimit-remaining", "0")
+          .addHeader("x-ratelimit-reset", "1755763200")
+          .addHeader("x-ratelimit-window", "1")
+          .build());
+    }
+
+    // The four headers ride on the response the middleware is about to return, throttled or not,
+    // so the exception the caller finally sees carries the state of the bucket it exhausted.
+    assertThatThrownBy(() -> client(2).validateByKey("K"))
+        .isInstanceOf(TamgaApiException.class)
+        .satisfies(t -> {
+          RateLimitInfo rateLimit = ((TamgaApiException) t).responseMetadata().rateLimit();
+          assertThat(rateLimit.isPresent()).isTrue();
+          assertThat(rateLimit.limit()).isEqualTo(100L);
+          assertThat(rateLimit.remaining()).isZero();
+          assertThat(rateLimit.resetAt()).isEqualTo(1_755_763_200L);
+          assertThat(rateLimit.window()).isEqualTo(1L);
+        });
+  }
+
+  @Test
+  void anErrorFromAnUnlimitedServerReportsAbsentRatherThanZero() {
+    server.enqueue(new MockResponse.Builder().code(404).body("{}").build());
+
+    // Rate limiting is disabled outright when the limiter cannot be built, and then not one of
+    // the four headers is written. That must not read as "no requests left".
+    assertThatThrownBy(() -> client(3).validateByKey("K"))
+        .isInstanceOf(TamgaApiException.class)
+        .satisfies(t -> {
+          RateLimitInfo rateLimit = ((TamgaApiException) t).responseMetadata().rateLimit();
+          assertThat(rateLimit.isPresent()).isFalse();
+          assertThat(rateLimit.remaining()).isEqualTo(RateLimitInfo.ABSENT);
+        });
   }
 
   @Test
