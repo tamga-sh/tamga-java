@@ -19,17 +19,18 @@ Two independent surfaces, either of which can be used without the other:
 Requires Java 11 or newer. The published bytecode target is Java 11; the build toolchain is
 Temurin 17.
 
+<!-- x-release-please-start-version -->
 ```kotlin
 // build.gradle.kts
 dependencies {
-    implementation("sh.tamga:tamga-sdk:1.3.0")
+    implementation("sh.tamga:tamga-sdk:1.4.0")
 }
 ```
 
 ```groovy
 // build.gradle
 dependencies {
-    implementation "sh.tamga:tamga-sdk:1.3.0"
+    implementation "sh.tamga:tamga-sdk:1.4.0"
 }
 ```
 
@@ -38,9 +39,10 @@ dependencies {
 <dependency>
   <groupId>sh.tamga</groupId>
   <artifactId>tamga-sdk</artifactId>
-  <version>1.3.0</version>
+  <version>1.4.0</version>
 </dependency>
 ```
+<!-- x-release-please-end -->
 
 ## Quickstart
 
