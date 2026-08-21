@@ -22,6 +22,7 @@ import sh.tamga.sdk.error.TamgaMachineOverLimitException;
 import sh.tamga.sdk.error.TamgaTransportException;
 import sh.tamga.sdk.model.ActivationOptions;
 import sh.tamga.sdk.model.ActivationResult;
+import sh.tamga.sdk.model.Artifact;
 import sh.tamga.sdk.model.CheckOutOptions;
 import sh.tamga.sdk.model.Component;
 import sh.tamga.sdk.model.CreateComponentOptions;
@@ -892,7 +893,7 @@ public final class TamgaClient {
     entitlementCache.invalidate(licenseId);
   }
 
-  // ------------------------------------------------- releases and diagnostics
+  // ----------------------------------------------------------------- releases
 
   /**
    * Asks whether a newer release is available for an installed version.
@@ -915,8 +916,9 @@ public final class TamgaClient {
    * error document, so it surfaces with the synthetic {@code UNKNOWN} code the error path uses for
    * any non-JSON:API body.
    *
-   * <p>No download URL comes back. The artifact-download route exists, but no credential this SDK
-   * issues is permitted to use it, so obtaining the build itself is the application's problem.
+   * <p>No download URL comes back on this route -- the release resource carries none. Fetch the
+   * offered release's artifacts with {@link #listArtifacts} and mint a URL for the one you want
+   * with {@link #requestArtifactDownload(String)}.
    *
    * @param options the product, platform, file type, installed version and channel to check
    * @return the offered release, or {@link UpgradeCheckResult#none()}
@@ -936,6 +938,123 @@ public final class TamgaClient {
     }
     return UpgradeCheckResult.of(release);
   }
+
+  // --------------------------------------------------------------- artifacts
+
+  /**
+   * Lists a release's artifacts, one keyset-paginated page at a time.
+   *
+   * <p>Keyset, like {@link #listComponents}: this route takes {@code limit} and
+   * {@code page[after]}, sends no {@code meta.page} and no {@code links}, so the next cursor is
+   * synthesized from the last row's id when a full page came back.
+   *
+   * <p>{@link Artifact#redirectUrl()} is {@code null} on every row here. The field is omitted
+   * entirely by the list and show routes; only {@link #requestArtifactDownload(String)} populates
+   * it.
+   *
+   * <p>Unlike the download action, this route enforces the {@code artifact.read} permission and
+   * nothing else -- it does not consult the owning release's access gate. A release whose build
+   * this license may not download can still have its artifact metadata listed.
+   *
+   * @param releaseId the release whose artifacts to list -- typically
+   *     {@code checkForUpgrade(...).release().id()}
+   */
+  public Page<Artifact> listArtifacts(String releaseId, ListOptions options) {
+    ListOptions opts = options == null ? ListOptions.defaults() : options;
+    JsonNode root = transport.getJson(Arrays.asList("releases", releaseId, "artifacts"),
+        pageQuery(opts));
+    List<Artifact> items = new ArrayList<>();
+    for (JsonNode node : root.path("data")) {
+      items.add(Artifact.fromResourceNode(node));
+    }
+    return new Page<>(synthesizeCursor(items.size(), opts, lastId(root)), items);
+  }
+
+  /**
+   * Reads one artifact's metadata.
+   *
+   * <p>Carries no download URL: {@link Artifact#redirectUrl()} is {@code null} here, as on the
+   * listing. Use {@link #requestArtifactDownload(String)} to obtain one.
+   */
+  public Artifact getArtifact(String artifactId) {
+    JsonNode root = transport.getJson(Arrays.asList("artifacts", artifactId), null);
+    return Artifact.fromResourceNode(root.get("data"));
+  }
+
+  /**
+   * Asks the server for a short-lived presigned URL to an artifact's bytes, at the server's
+   * default lifetime of {@link Artifact#DEFAULT_DOWNLOAD_TTL}.
+   *
+   * <p>Equivalent to {@link #requestArtifactDownload(String, Duration)} with a null lifetime.
+   */
+  public Artifact requestArtifactDownload(String artifactId) {
+    return requestArtifactDownload(artifactId, null);
+  }
+
+  /**
+   * Asks the server for a short-lived presigned URL to an artifact's bytes, and returns the
+   * artifact with {@link Artifact#redirectUrl()} populated.
+   *
+   * <p><b>This method does not fetch the bytes, deliberately.</b> The URL it returns points at the
+   * object store rather than at the API, and the presigned query string is the entire
+   * authorisation on it. Fetch it with a client that sends <em>no</em> credentials: no
+   * {@code Authorization} header, no session cookie. Passing this SDK's licence key to a storage
+   * host would hand a live credential to a third party, and this SDK cannot do it on your behalf
+   * even by accident -- {@link Transport} builds every URL from the one configured API host, so it
+   * has no way to address the storage host at all.
+   *
+   * <p><b>Why the redirect is never followed.</b> The route answers {@code 303 See Other} by
+   * default, pointing at that same presigned URL. A client that follows it with the request's
+   * {@code Authorization} header still attached sends the licence key to the storage host. This
+   * SDK therefore always sends {@code ?redirect=false}, which returns the artifact resource with
+   * the URL in the body instead. The client built by {@link Builder} also refuses redirects
+   * outright ({@code followRedirects(false)}), so the default {@code 303} would surface as an
+   * error rather than being followed -- but a caller who supplies their own
+   * {@link OkHttpClient} opts out of that protection, and {@code ?redirect=false} keeps this call
+   * correct for them too.
+   *
+   * <p><b>A {@code 403} here is not necessarily an auth misconfiguration.</b> The handler enforces
+   * the owning release's read gate as well as the {@code artifact.download} permission
+   * ({@code artifacts/download_artifact.rs} calls
+   * {@code releases::service::enforce_release_access}), so the binary of a release whose product
+   * uses the {@code CLOSED} distribution strategy is refused to a licence key that genuinely holds
+   * the permission -- that strategy admits only admins, developers and product tokens
+   * ({@code releases/policy.rs:106-116}). The same {@code 403} also covers a suspended license, an
+   * expired one whose policy forbids new builds, and a license lacking the release's entitlements.
+   * All four carry the generic code {@code FORBIDDEN} and differ only in {@code detail}, so treat
+   * the code as "not for this license" rather than as a credential problem to retry.
+   *
+   * <p>A {@code 422 STORAGE_UNAVAILABLE} means the server has no object storage configured; a
+   * {@code 422 PRESIGN_TTL_INVALID} means a lifetime outside the accepted range reached the server.
+   *
+   * @param artifactId the artifact to mint a URL for
+   * @param ttl how long the URL should stay valid, between {@link Artifact#MIN_DOWNLOAD_TTL} and
+   *     {@link Artifact#MAX_DOWNLOAD_TTL}, or {@code null} for the server's
+   *     {@link Artifact#DEFAULT_DOWNLOAD_TTL}. Pick one that outlasts the download itself: the URL
+   *     expires while a slow transfer is still running.
+   * @throws IllegalArgumentException if {@code ttl} is outside the range the server accepts, which
+   *     is checked here so it costs no round trip
+   */
+  public Artifact requestArtifactDownload(String artifactId, Duration ttl) {
+    Map<String, String> query = new LinkedHashMap<>();
+    // Always explicit, never omitted -- the default is the 303 this SDK must not follow.
+    query.put("redirect", "false");
+    if (ttl != null) {
+      if (ttl.compareTo(Artifact.MIN_DOWNLOAD_TTL) < 0
+          || ttl.compareTo(Artifact.MAX_DOWNLOAD_TTL) > 0) {
+        throw new IllegalArgumentException("A download URL lifetime must be between "
+            + Artifact.MIN_DOWNLOAD_TTL.getSeconds() + " and "
+            + Artifact.MAX_DOWNLOAD_TTL.getSeconds() + " seconds, but was " + ttl.getSeconds()
+            + ".");
+      }
+      query.put("ttl", Long.toString(ttl.getSeconds()));
+    }
+    JsonNode root = transport.getJson(
+        Arrays.asList("artifacts", artifactId, "actions", "download"), query);
+    return Artifact.fromResourceNode(root.get("data"));
+  }
+
+  // -------------------------------------------------------------- diagnostics
 
   /**
    * Reads the server's liveness report.

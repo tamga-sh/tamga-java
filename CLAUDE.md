@@ -141,10 +141,33 @@ source doc for the full set, including analytics/EE items that don't touch this 
   body**, so an "optional release" return type that cannot distinguish 204 from a decode failure
   is wrong; omitting `constraint` defaults to patch-only (`~x.y.z`); omitting `channel` matches
   **every** channel including alpha and dev, so require it at the API level; the handler uses a
-  bare query extractor, so a malformed query answers **plain-text 400**, not JSON:API. The
-  artifact-download route exists too, but every credential this SDK issues is currently refused by
-  it (`artifact.download` is in no role's default permission set) — that one is genuinely blocked
-  upstream.
+  bare query extractor, so a malformed query answers **plain-text 400**, not JSON:API.
+- **The artifact read and download routes are reachable now, and are implemented.** The previous
+  directive here — "`artifact.download` is in no role's default permission set, so that one is
+  genuinely blocked upstream" — was true when written and is no longer: tamga-api `e6d317b`
+  ("grant artifact.download explicitly and gate the download route") added `artifact.read` and
+  `artifact.download` to `Role::LicenseToken` (`authz/mod.rs:264-265`) and routed a real handler.
+  `listArtifacts`, `getArtifact` and `requestArtifactDownload` cover them. Three constraints the
+  implementation encodes, each with a plausible wrong answer:
+  - **The download answers `303 See Other`** to a short-lived presigned storage URL. Never follow
+    it with the request's `Authorization` header still attached — that hands the licence key to
+    the storage host. The client always sends `?redirect=false`, which returns the artifact
+    resource with `redirectUrl` populated; fetch that URL with **no** credentials. The
+    `OkHttpClient` this SDK builds also refuses redirects outright, so the `303` would surface as
+    an error rather than being followed, but a caller supplying their own client opts out of that.
+  - **`ArtifactAttributes` is `rename_all = "camelCase"` AND carries explicit
+    `#[serde(rename = "created")]` / `#[serde(rename = "updated")]`** (`artifacts/serializer.rs:20`,
+    `:34-37`). So the wire names are `redirectUrl` but `created`/`updated` — **not**
+    `createdAt`/`updatedAt`. Applying camelCase uniformly reads two null timestamps and nothing
+    complains. `Release` carries the same pair of rules.
+  - **The download handler enforces the owning release's read gate as well as the permission**
+    (`releases::service::enforce_release_access`), so a `403` there is not necessarily an auth
+    misconfiguration: a `CLOSED` distribution strategy admits only admins, developers and product
+    tokens. Suspension, expiry and entitlements are checked on the same path, and all four
+    refusals carry the generic `FORBIDDEN` code, differing only in `detail`.
+
+  `artifact.create` / `.update` / `.delete` remain absent from `Role::LicenseToken`, so create,
+  update, delete and upload stay out of scope and are deliberately not modelled.
 - **Auth IS enforced server-side, and license-key auth is off by default.** The previous claim
   here ("no auth is enforced today") was false. Every endpoint this SDK calls is authenticated,
   and `Authorization: License <key>` additionally requires the license's policy to set

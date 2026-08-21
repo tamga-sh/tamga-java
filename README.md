@@ -146,6 +146,38 @@ if (upgrade.updateOffered()) {
 }
 ```
 
+Fetching the build itself. The upgrade check hands back a release, not bytes; the bytes are its
+artifacts:
+
+```java
+import java.time.Duration;
+import sh.tamga.sdk.model.Artifact;
+import sh.tamga.sdk.model.ListOptions;
+
+for (Artifact artifact : client.listArtifacts(upgrade.release().id(), ListOptions.defaults())
+    .items()) {
+  if (!"darwin".equals(artifact.platform())) {
+    continue;
+  }
+  // Returns the artifact with redirectUrl populated. It does NOT fetch the bytes, deliberately.
+  Artifact download = client.requestArtifactDownload(artifact.id(), Duration.ofMinutes(30));
+  fetchWithNoCredentials(download.redirectUrl(), artifact.checksum());
+}
+```
+
+**Send no credentials to `redirectUrl()`.** It points at object storage, not at the API, and its
+presigned query string is the whole authorisation. The route's own default is a `303 See Other` to
+that URL; a client that follows it with the request's `Authorization` header still attached hands
+your licence key to the storage host. This SDK asks for `?redirect=false` and returns the URL
+instead, and the client it builds refuses redirects outright — but the fetch is yours, so use a
+plain HTTP client with no auth header and no session cookie on it, and verify `checksum()`
+afterwards.
+
+A `403` here is not necessarily a credential problem: the handler enforces the owning release's
+read gate as well as the `artifact.download` permission, so a product on the `CLOSED` distribution
+strategy refuses a licence key that genuinely holds the permission. Suspension, expiry and missing
+entitlements land on the same status with the same generic `FORBIDDEN` code.
+
 **Note:** this SDK generates no machine fingerprint for you, and embeds no account public key.
 Producing a stable, device-specific fingerprint and deciding your grace-period and enforcement
 policy remain application concerns — see [Known gaps](#known-gaps).
@@ -589,9 +621,11 @@ boundaries, not oversights.
   the existence of a build the caller may not have. `UpgradeCheckResult.updateOffered() == false`
   therefore means *no update is available to you*, never *you are on the latest version*, and
   there is no client-side way to separate them. A suspended license is the exception: it comes
-  back as `403` rather than being folded into the `204`. No download URL is returned — the
-  artifact route exists but no credential this SDK issues may use it. RFC 9421
-  response-signature verification is still not implemented.
+  back as `403` rather than being folded into the `204`. No download URL is returned by the check
+  itself — the bytes hang off the release's artifacts, which `listArtifacts` and
+  `requestArtifactDownload` now reach (`Role::LicenseToken` gained `artifact.read` and
+  `artifact.download`; creating, updating, deleting and uploading artifacts remain out of reach and
+  are not modelled). RFC 9421 response-signature verification is still not implemented.
 
 **Transport hardening**
 

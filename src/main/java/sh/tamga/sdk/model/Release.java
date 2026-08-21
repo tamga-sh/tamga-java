@@ -19,9 +19,13 @@ import java.util.Map;
  * <p>{@code tag} is omitted from the response entirely when the release has none, rather than sent
  * as null.
  *
- * <p>There is deliberately no download URL here. The artifact-download route exists server-side,
- * but no credential this SDK issues is permitted to use it, so a field pointing at it would
- * advertise a capability the caller does not have.
+ * <p>There is no download URL here, because the release resource carries none: the bytes live on
+ * its {@link Artifact}s. That is a change of reason rather than of fact -- this note previously
+ * said the artifact route was unreachable to every credential this SDK issues, which stopped being
+ * true when {@code Role::LicenseToken} gained {@code artifact.read} and {@code artifact.download}
+ * ({@code authz/mod.rs:264-265}). Reach the bytes with
+ * {@code TamgaClient.listArtifacts(release.id(), ...)} followed by
+ * {@code requestArtifactDownload(...)}.
  */
 public final class Release {
 
