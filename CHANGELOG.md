@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.4.2](https://github.com/tamga-sh/tamga-java/compare/v1.4.1...v1.4.2) (2026-08-21)
+
+
+### Bug Fixes
+
+* canonicalise a fingerprint before it becomes a second seat ([44628f2](https://github.com/tamga-sh/tamga-java/commit/44628f2fd18de987dc44383cde9abf570533eb66))
+* match a signing key on its served id alone ([3f70de7](https://github.com/tamga-sh/tamga-java/commit/3f70de790c2953ab25eb5aa7f101dd66f1791762))
+* measure the JDK client too, since the caller's fetch is theirs ([116956c](https://github.com/tamga-sh/tamga-java/commit/116956c4d3a5104518be6bc6f6a98855d4830cab))
+* point a test at the path its name claims to cover (M22) ([b2b4b8c](https://github.com/tamga-sh/tamga-java/commit/b2b4b8c67e610830ce3f357871782ef332e7e7c2))
+* reach a release's artifacts now that a licence key may (M25) ([a27ce79](https://github.com/tamga-sh/tamga-java/commit/a27ce79bf4b27336f421afaa42ccc2a394b0f92c))
+* refuse a download URL this SDK would not fetch itself ([038b43e](https://github.com/tamga-sh/tamga-java/commit/038b43eb7b67fd4c7eb602aae588c3afb51bdda0))
+* say what the download redirect really leaks, and to which host ([b78f8a2](https://github.com/tamga-sh/tamga-java/commit/b78f8a2e79f056c0d870f2e302fd1049adc4248b))
+* verify offline files across a key rotation, reach a release's artifacts, and canonicalise fingerprints ([9132ef3](https://github.com/tamga-sh/tamga-java/commit/9132ef326c4573a5492ae8abe91decedd06486d0))
+* verify offline files against the key set their kid names (M22) ([154040e](https://github.com/tamga-sh/tamga-java/commit/154040ed13270cccf715a2458e71c55e31b37828))
+
 ## [1.4.1](https://github.com/tamga-sh/tamga-java/compare/v1.4.0...v1.4.1) (2026-08-21)
 
 
