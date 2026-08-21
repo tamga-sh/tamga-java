@@ -189,6 +189,26 @@ source doc for the full set, including analytics/EE items that don't touch this 
   Implemented in `Transport`: see `isRetryable`, `parseRetryAfterSeconds` and `retryDelayMillis`,
   and `RateLimitTest` for the regressions that pin the policy — in particular that `POST
   /machines` makes exactly one call.
+- **The `x-ratelimit-*` headers ARE set — four of them, not three.** `ResponseMetadata`'s Javadoc
+  used to call them "present in the server's CORS allowlist only, never set by a handler"; that
+  was false on both counts and is corrected. `shared/rate_limit/middleware.rs:140-143` writes
+  `x-ratelimit-limit`, `-remaining`, `-reset` **and** `-window` onto the response it is about to
+  return, throttled or not, and `router.rs:123-126` additionally exposes all four to browsers.
+  Note the fleet spec and `docs/api-client-contract.md` both say three are set with `window`
+  "CORS-only" — `window` is written by the same `insert_num` run as the other three, one line
+  below them. They are modeled as `RateLimitInfo`, reached via `ResponseMetadata.rateLimit()`,
+  which is **additive**: the four-argument `ResponseMetadata` constructor is untouched and now
+  delegates with `RateLimitInfo.absent()`, because unlike the 0.x SDKs in this fleet a `^1.3`
+  consumer auto-upgrades into a minor. Two traps encoded in the type: `reset` is an absolute Unix
+  timestamp (`reset_at: now + ttl`, `rate_limit/mod.rs:81`), not a delay; and every field is
+  `ABSENT` (`-1`) rather than `0` when the middleware wrote nothing, which is what happens
+  whenever `build_rate_limiter` returns `None` (`startup.rs:72-88`) and rate limiting is off
+  entirely. `window` is currently the constant `1` (`middleware.rs:27`).
+  ⚠️ The bag itself only reaches callers through `TamgaApiException.responseMetadata()` —
+  `Transport.metadataOf` is called from `throwIfError` and nowhere else, so a successful response
+  discards its metadata. The fleet contract's "attach it to successful responses **and** to every
+  API error" is therefore not yet true here; surfacing it on the success path would change every
+  endpoint's return type and is deliberately not part of M19.
 - **Machine creation enforces the policy's limits — through the overage strategy.** The old
   directive ("no policy limit is checked at creation; limits surface only through validation") was
   false. `POST /machines` rejects with `422 MACHINE_LIMIT_EXCEEDED` / `CORE_LIMIT_EXCEEDED` /
