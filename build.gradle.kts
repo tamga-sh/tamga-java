@@ -118,7 +118,7 @@ dependencies {
     //
     // OkHttp rather than java.net.http.HttpClient: this SDK is documented as running on Android
     // (README "Known gaps"), and java.net.http does not exist on Android at any API level.
-    implementation("com.squareup.okhttp3:okhttp:5.4.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.0")
 
     // --- JSON ---
     // `FAIL_ON_UNKNOWN_PROPERTIES = false` config (forward-compat with server
@@ -143,7 +143,7 @@ dependencies {
     // client against net/http/httptest rather than a mocked round-tripper: the request actually
     // goes over a socket, so header construction, URL escaping and retry behaviour are exercised
     // end to end instead of asserted against a stub.
-    testImplementation("com.squareup.okhttp3:mockwebserver3-junit5:5.4.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver3-junit5:5.5.0")
 }
 
 tasks.test {
