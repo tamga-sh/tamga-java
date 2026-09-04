@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.3](https://github.com/tamga-sh/tamga-java/compare/v1.4.2...v1.4.3) (2026-09-04)
+
+
+### Miscellaneous Chores
+
+* **deps:** release the dependency updates as 1.4.3 ([#50](https://github.com/tamga-sh/tamga-java/issues/50)) ([cf0cb84](https://github.com/tamga-sh/tamga-java/commit/cf0cb8433f4e018bec92aad6067107c39aba48f8))
+
 ## [1.4.2](https://github.com/tamga-sh/tamga-java/compare/v1.4.1...v1.4.2) (2026-08-21)
 
 
