@@ -13,7 +13,7 @@ plugins {
     `java-library`
     checkstyle
     jacoco
-    id("com.github.spotbugs") version "6.5.10"
+    id("com.github.spotbugs") version "6.5.11"
     id("com.palantir.git-version") version "5.0.0"
     id("com.vanniktech.maven.publish") version "0.37.0"
     signing
@@ -118,20 +118,20 @@ dependencies {
     //
     // OkHttp rather than java.net.http.HttpClient: this SDK is documented as running on Android
     // (README "Known gaps"), and java.net.http does not exist on Android at any API level.
-    implementation("com.squareup.okhttp3:okhttp:5.4.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.0")
 
     // --- JSON ---
     // `FAIL_ON_UNKNOWN_PROPERTIES = false` config (forward-compat with server
     // additions) lives in TamgaJsonMapper, shared by the checkout/proof
     // offline-decode path and (eventually) TamgaClient's response mapping.
-    api("com.fasterxml.jackson.core:jackson-databind:2.22.1")
+    api("com.fasterxml.jackson.core:jackson-databind:2.22.2")
     // Optional<T> (de)serialization support for model fields that are
     // genuinely absent-vs-null on the wire (see ecc:java-coding-standards on
     // Optional usage — fields, not method params).
-    api("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.22.1")
+    api("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.22.2")
     // Instant/OffsetDateTime (de)serialization -- jackson-databind alone does
     // not understand java.time types.
-    api("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.1")
+    api("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.2")
 
     // --- Test (test scope only) ---
     testImplementation("org.junit.jupiter:junit-jupiter:5.14.4")
@@ -143,7 +143,7 @@ dependencies {
     // client against net/http/httptest rather than a mocked round-tripper: the request actually
     // goes over a socket, so header construction, URL escaping and retry behaviour are exercised
     // end to end instead of asserted against a stub.
-    testImplementation("com.squareup.okhttp3:mockwebserver3-junit5:5.4.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver3-junit5:5.5.0")
 }
 
 tasks.test {
