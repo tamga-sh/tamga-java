@@ -124,7 +124,7 @@ dependencies {
     // `FAIL_ON_UNKNOWN_PROPERTIES = false` config (forward-compat with server
     // additions) lives in TamgaJsonMapper, shared by the checkout/proof
     // offline-decode path and (eventually) TamgaClient's response mapping.
-    api("com.fasterxml.jackson.core:jackson-databind:2.22.1")
+    api("com.fasterxml.jackson.core:jackson-databind:2.22.2")
     // Optional<T> (de)serialization support for model fields that are
     // genuinely absent-vs-null on the wire (see ecc:java-coding-standards on
     // Optional usage — fields, not method params).
