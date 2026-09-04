@@ -128,10 +128,10 @@ dependencies {
     // Optional<T> (de)serialization support for model fields that are
     // genuinely absent-vs-null on the wire (see ecc:java-coding-standards on
     // Optional usage — fields, not method params).
-    api("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.22.1")
+    api("com.fasterxml.jackson.datatype:jackson-datatype-jdk8:2.22.2")
     // Instant/OffsetDateTime (de)serialization -- jackson-databind alone does
     // not understand java.time types.
-    api("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.1")
+    api("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.22.2")
 
     // --- Test (test scope only) ---
     testImplementation("org.junit.jupiter:junit-jupiter:5.14.4")
