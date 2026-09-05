@@ -72,6 +72,10 @@ public class TamgaApiException extends RuntimeException {
         return new LicenseKeyMissingException(error, httpStatus, responseMetadata);
       case "SCHEME_NOT_SUPPORTED":
         return new SchemeNotSupportedException(error, httpStatus, responseMetadata);
+      case "SIGNING_KEY_MISSING":
+        return new SigningKeyMissingException(error, httpStatus, responseMetadata);
+      case "SECRET_KEY_MISSING":
+        return new SecretKeyMissingException(error, httpStatus, responseMetadata);
       case "DATASET_INVALID":
         return new DatasetInvalidException(error, httpStatus, responseMetadata);
       case "MACHINE_LIMIT_EXCEEDED":
@@ -166,12 +170,31 @@ public class TamgaApiException extends RuntimeException {
   /**
    * That fingerprint is already registered. HTTP 409. Raised both when creating a machine against
    * a license and when creating a component against a machine -- the scope differs by call site.
+   *
+   * <p>On machine creation the server names the machine already holding the fingerprint in
+   * {@code meta.machineId} -- <b>only when that machine is on the license the create was addressed
+   * to</b>. See {@link #existingMachineId()}.
    */
   public static final class FingerprintTakenException extends TamgaApiException {
     private static final long serialVersionUID = 1L;
 
     FingerprintTakenException(TamgaError error, int status, ResponseMetadata metadata) {
       super(error, status, metadata);
+    }
+
+    /**
+     * Returns the id of the machine already holding the fingerprint, when the server named it, or
+     * {@code null}.
+     *
+     * <p>A returned id is always the caller's own seat: the server sends {@code meta.machineId}
+     * only for a conflict on the requested license. A cross-license conflict under
+     * {@code UNIQUE_PER_POLICY}/{@code UNIQUE_PER_ACCOUNT}, a component-create conflict, and a
+     * pre-patch server all answer {@code null}. {@code TamgaClient.activateMachine} with
+     * {@code reuseTakenFingerprint(true)} uses it to skip the paginated search.
+     */
+    public String existingMachineId() {
+      String id = error() == null ? null : error().meta().get("machineId");
+      return id == null || id.isEmpty() ? null : id;
     }
   }
 
@@ -237,6 +260,35 @@ public class TamgaApiException extends RuntimeException {
     private static final long serialVersionUID = 1L;
 
     DatasetInvalidException(TamgaError error, int status, ResponseMetadata metadata) {
+      super(error, status, metadata);
+    }
+  }
+
+  /**
+   * The account holds no signing key for this operation. HTTP 422, raised by license and machine
+   * check-out and by offline-proof generation.
+   *
+   * <p>The server now refuses rather than signing with nothing. Pre-patch servers issued such files
+   * anyway with {@code keyId("")} ({@code e3b0c44298fc1c14}) as the {@code kid}, which the checkout
+   * package's {@code SigningKeyNotPublishedException} still reports for files from that era. Not
+   * retryable: an operator rotates a key in.
+   */
+  public static final class SigningKeyMissingException extends TamgaApiException {
+    private static final long serialVersionUID = 1L;
+
+    SigningKeyMissingException(TamgaError error, int status, ResponseMetadata metadata) {
+      super(error, status, metadata);
+    }
+  }
+
+  /**
+   * Token minting was refused because the account has no secret key. HTTP 422. Same remedy class
+   * as {@link SigningKeyMissingException}: server-side configuration, never retryable.
+   */
+  public static final class SecretKeyMissingException extends TamgaApiException {
+    private static final long serialVersionUID = 1L;
+
+    SecretKeyMissingException(TamgaError error, int status, ResponseMetadata metadata) {
       super(error, status, metadata);
     }
   }

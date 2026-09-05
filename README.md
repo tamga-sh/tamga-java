@@ -442,7 +442,7 @@ Three conditions are distinguishable, all subclasses of `TamgaCheckoutException`
 |---|---|---|
 | `UnknownSigningKeyException` | The file names a key the set does not hold. | Refresh the key set or ship an update — the file may well be genuine. |
 | `SigningKeyNotPublishedException` | The file's `kid` is `keyId("")`, so the issuing account never published a public key. A subclass of the above. | Refetching cannot help; the account's key column has to be populated server-side. |
-| `NoUsableSigningKeyException` | The set holds no usable Ed25519 key at all. | Check what was pinned or fetched. An empty *published* set is normal for an account that has never rotated. |
+| `NoUsableSigningKeyException` | The set holds no usable Ed25519 key at all. | Check what was pinned or fetched. An empty *published* set marks a pre-patch server: since the API patch every account publishes its key from creation. |
 
 Three things are worth knowing before building on this:
 
@@ -576,10 +576,12 @@ boundaries, not oversights.
   (this SDK used to state it did not, and never read it — a machine file consequently verified
   forever), but the server never re-checks an already-issued offline file, so the `ttl` you
   requested at checkout is only as binding as the client that reads it.
-- **8 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled for
+- **5 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled for
   forward-compatibility, and `ValidationCode.reachable()` reports which. Do not build behaviour on
   an unreachable one. `ENTITLEMENTS_MISSING` and `FINGERPRINT_SCOPE_MISMATCH` moved into the
-  reachable set once the server started enforcing those two scope fields.
+  reachable set once the server started enforcing those two scope fields, and
+  `HEARTBEAT_NOT_STARTED`, `HEARTBEAT_DEAD` (fingerprint scope under `require_heartbeat`) and
+  `TOO_MANY_USERS` are reachable since the API patch.
 - **Six `Scope` fields are enforced** — product, policy, user, environment, and now also
   `fingerprint` and `entitlements`, which used to be parsed and ignored. `entitlements` takes
   entitlement *codes*, compared case-insensitively, and is satisfied by policy-inherited

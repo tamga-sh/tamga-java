@@ -4,8 +4,7 @@ import sh.tamga.sdk.model.ValidationMeta;
 
 /**
  * Thrown by {@code TamgaClient.activateMachine} when the license turned out to be over a policy
- * limit. <b>No machine row survives either way</b> -- see {@link #rolledBack()} for which of the
- * two paths produced it.
+ * limit. <b>Whether a machine row survives depends on the path</b> -- see {@link #rolledBack()}.
  *
  * <p>There are two, because the server enforces limits in two places:
  *
@@ -66,10 +65,13 @@ public final class TamgaMachineOverLimitException extends RuntimeException {
   }
 
   /**
-   * Returns whether a machine row was created and then deleted ({@code true}), or the server
-   * refused to create one in the first place ({@code false}).
+   * Returns whether a machine row was created and then deleted ({@code true}), or not
+   * ({@code false}).
    *
-   * <p>Only relevant for diagnostics: no machine exists in either case.
+   * <p>{@code false} covers two cases: the server refused to create a row at all (create-time
+   * {@code 422}), and a machine adopted through {@code ActivationOptions.reuseTakenFingerprint} --
+   * which is <b>never</b> deleted, because it predates the call. In that second case the row still
+   * exists; {@code validationMeta()} says which limit the license is over.
    */
   public boolean rolledBack() {
     return rolledBack;

@@ -1,9 +1,12 @@
 package sh.tamga.sdk.error;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
+import java.util.Collections;
 import org.junit.jupiter.api.Test;
 import sh.tamga.sdk.model.ResponseMetadata;
 import sh.tamga.sdk.model.TamgaJsonMapper;
@@ -204,5 +207,72 @@ class TamgaApiExceptionTest {
         .hasMessage("boom");
     assertThat(new TamgaTransportException("boom", new IOException("cause")))
         .hasCauseInstanceOf(IOException.class);
+  }
+
+  @Test
+  void numericStatusDecodesLikeTheStringTheServerRenders() throws IOException {
+    // JSON:API renders status as "422"; the API plan's D18 fixture sends 422. asText() renders
+    // both as "422"; this pins it so a stricter reader cannot regress it to null.
+    JsonNode document = TamgaJsonMapper.instance().readTree(
+        "{\"errors\":[{\"id\":\"e-1\",\"status\":422,\"code\":\"SIGNING_KEY_MISSING\","
+            + "\"title\":\"Unprocessable Entity\",\"detail\":\"no signing key\"}]}");
+
+    TamgaError error = TamgaError.fromErrorDocument(document, "fallback");
+
+    assertThat(error.status()).isEqualTo("422");
+    assertThat(error.code()).isEqualTo("SIGNING_KEY_MISSING");
+  }
+
+  @Test
+  void theTwoKeyMaterialCodesMapToTheirOwnTypes() {
+    assertThat(dispatch("SIGNING_KEY_MISSING", 422))
+        .isInstanceOf(TamgaApiException.SigningKeyMissingException.class);
+    assertThat(dispatch("SECRET_KEY_MISSING", 422))
+        .isInstanceOf(TamgaApiException.SecretKeyMissingException.class);
+  }
+
+  @Test
+  void scalarMetaMembersAreKeptAndNestedOnesDropped() throws IOException {
+    // Exact wire shape from the API plan: a same-license FINGERPRINT_TAKEN names the machine.
+    JsonNode document = TamgaJsonMapper.instance().readTree(
+        "{\"errors\":[{\"status\":\"409\",\"code\":\"FINGERPRINT_TAKEN\",\"detail\":\"taken\","
+            + "\"meta\":{\"machineId\":\"mach-7\",\"count\":2,\"flag\":true,"
+            + "\"nested\":{\"x\":1},\"list\":[1],\"none\":null}}]}");
+
+    TamgaError error = TamgaError.fromErrorDocument(document, "fallback");
+
+    assertThat(error.meta()).containsExactly(
+        entry("machineId", "mach-7"), entry("count", "2"), entry("flag", "true"));
+    assertThatThrownBy(() -> error.meta().put("x", "y"))
+        .isInstanceOf(UnsupportedOperationException.class);
+  }
+
+  @Test
+  void metaIsEmptyWhenAbsentOrNotAnObject() throws IOException {
+    assertThat(TamgaError.fromErrorDocument(TamgaJsonMapper.instance().readTree(
+        "{\"errors\":[{\"code\":\"FINGERPRINT_TAKEN\"}]}"), "f").meta()).isEmpty();
+    assertThat(TamgaError.fromErrorDocument(TamgaJsonMapper.instance().readTree(
+        "{\"errors\":[{\"code\":\"FINGERPRINT_TAKEN\",\"meta\":\"junk\"}]}"), "f").meta())
+        .isEmpty();
+    assertThat(new TamgaError(null, null, "X", null, null, null).meta()).isEmpty();
+    assertThat(new TamgaError(null, null, "X", null, null, null, null).meta()).isEmpty();
+  }
+
+  @Test
+  void fingerprintTakenExposesTheExistingMachineIdOnlyWhenNamed() {
+    ResponseMetadata metadata = new ResponseMetadata("1.8", "EE", "multiplayer", "req-1");
+    TamgaApiException named = TamgaApiException.from(new TamgaError(null, "409",
+        "FINGERPRINT_TAKEN", null, "taken", null, Collections.singletonMap("machineId", "mach-7")),
+        409, metadata);
+    TamgaApiException bare = TamgaApiException.from(
+        new TamgaError(null, "409", "FINGERPRINT_TAKEN", null, "taken", null), 409, metadata);
+    TamgaApiException blank = TamgaApiException.from(new TamgaError(null, "409",
+        "FINGERPRINT_TAKEN", null, "taken", null, Collections.singletonMap("machineId", "")),
+        409, metadata);
+
+    assertThat(((TamgaApiException.FingerprintTakenException) named).existingMachineId())
+        .isEqualTo("mach-7");
+    assertThat(((TamgaApiException.FingerprintTakenException) bare).existingMachineId()).isNull();
+    assertThat(((TamgaApiException.FingerprintTakenException) blank).existingMachineId()).isNull();
   }
 }

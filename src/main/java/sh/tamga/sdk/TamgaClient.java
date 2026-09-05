@@ -649,12 +649,27 @@ public final class TamgaClient {
    * and only for a machine the {@code filter[license]} narrowing proves belongs to the license
    * being activated against -- a machine resource carries no license id of its own, so a row found
    * any other way could not be shown to be the right one.
+   *
+   * <p>Since the API patch a same-license conflict names the existing machine in
+   * {@code meta.machineId}; that is read first with one {@link #getMachine}, and the
+   * {@code filter[license]}-narrowed search is the fallback for a conflict without {@code meta}.
    */
   private Machine recoverTakenFingerprint(CreateMachineOptions options, ActivationOptions opts,
       TamgaApiException failure) {
     if (!opts.reusesTakenFingerprint()
         || !(failure instanceof TamgaApiException.FingerprintTakenException)) {
       return null;
+    }
+    // Fast path: a same-license conflict names the machine, so one read replaces the search. The
+    // server sends meta.machineId only for the requested license, so the row is ours to adopt.
+    String namedId = ((TamgaApiException.FingerprintTakenException) failure).existingMachineId();
+    if (namedId != null) {
+      try {
+        return getMachine(namedId);
+      } catch (TamgaApiException.NotFoundException gone) {
+        // Deleted between the conflict and this read. The search below finds nothing and the
+        // caller rethrows the conflict -- never this 404.
+      }
     }
     return findMachineByFingerprint(options.fingerprint(), options.licenseId());
   }

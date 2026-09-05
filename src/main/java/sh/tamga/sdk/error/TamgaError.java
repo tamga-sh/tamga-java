@@ -1,6 +1,9 @@
 package sh.tamga.sdk.error;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * A single JSON:API error object as returned by the Tamga API.
@@ -8,7 +11,7 @@ import com.fasterxml.jackson.databind.JsonNode;
  * <p>The wire shape is:
  *
  * <pre>{@code
- * {"errors": [{id, status, code, title, detail, source: {pointer}}]}
+ * {"errors": [{id, status, code, title, detail, source: {pointer}, meta}]}
  * }</pre>
  *
  * <p>{@link #code()} is stable and is what matching logic must use. {@link #detail()} is
@@ -25,16 +28,28 @@ public final class TamgaError {
   private final String title;
   private final String detail;
   private final String pointer;
+  private final Map<String, String> meta;
 
-  /** Creates an error object from already-extracted fields. */
+  /** Creates an error object from already-extracted fields, with no {@code meta}. */
   public TamgaError(String id, String status, String code, String title, String detail,
       String pointer) {
+    this(id, status, code, title, detail, pointer, Collections.emptyMap());
+  }
+
+  /**
+   * Creates an error object from already-extracted fields.
+   *
+   * @param meta the error's scalar {@code meta} members, stringified; {@code null} reads as empty
+   */
+  public TamgaError(String id, String status, String code, String title, String detail,
+      String pointer, Map<String, String> meta) {
     this.id = id;
     this.status = status;
     this.code = code == null || code.isEmpty() ? UNKNOWN_CODE : code;
     this.title = title;
     this.detail = detail;
     this.pointer = pointer;
+    this.meta = meta == null || meta.isEmpty() ? Collections.emptyMap() : new LinkedHashMap<>(meta);
   }
 
   /**
@@ -43,6 +58,11 @@ public final class TamgaError {
    * <p>Returns a synthetic {@link #UNKNOWN_CODE} error when the body is null, is not a JSON:API
    * error document, or carries an empty {@code errors} array. Error bodies come from the network
    * and are untrusted -- decoding one must never throw.
+   *
+   * <p>{@code status} is read with {@code asText()}, so the string JSON:API renders ({@code "422"})
+   * and a JSON number ({@code 422}) both decode to {@code "422"} (D18). {@code meta} keeps its
+   * scalar members, stringified; nested values are dropped and a non-object {@code meta} reads as
+   * empty rather than failing the document.
    */
   public static TamgaError fromErrorDocument(JsonNode document, String fallbackDetail) {
     JsonNode errors = document == null ? null : document.get("errors");
@@ -57,12 +77,28 @@ public final class TamgaError {
         textOrNull(first, "code"),
         textOrNull(first, "title"),
         textOrNull(first, "detail"),
-        source == null ? null : textOrNull(source, "pointer"));
+        source == null ? null : textOrNull(source, "pointer"),
+        scalarMembers(first.get("meta")));
   }
 
   private static String textOrNull(JsonNode parent, String field) {
     JsonNode node = parent == null ? null : parent.get(field);
     return node == null || node.isNull() ? null : node.asText();
+  }
+
+  /** Reads an object's scalar members as strings; nested values dropped, a non-object is empty. */
+  private static Map<String, String> scalarMembers(JsonNode node) {
+    if (node == null || !node.isObject()) {
+      return Collections.emptyMap();
+    }
+    Map<String, String> out = new LinkedHashMap<>();
+    for (Map.Entry<String, JsonNode> field : node.properties()) {
+      JsonNode value = field.getValue();
+      if (value.isValueNode() && !value.isNull()) {
+        out.put(field.getKey(), value.asText());
+      }
+    }
+    return out;
   }
 
   /** Returns the server-assigned error id, or {@code null}. */
@@ -93,5 +129,15 @@ public final class TamgaError {
   /** Returns the JSON pointer identifying the offending request field, or {@code null}. */
   public String pointer() {
     return pointer;
+  }
+
+  /**
+   * Returns the error's scalar {@code meta} members, stringified and unmodifiable; empty when the
+   * server sent none. Per-code: today only {@code FINGERPRINT_TAKEN} populates it
+   * ({@code machineId}), read through
+   * {@link TamgaApiException.FingerprintTakenException#existingMachineId()}.
+   */
+  public Map<String, String> meta() {
+    return Collections.unmodifiableMap(meta);
   }
 }

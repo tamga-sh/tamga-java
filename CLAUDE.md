@@ -243,12 +243,14 @@ source doc for the full set, including analytics/EE items that don't touch this 
   three expiration strategies an expired license still authenticates and validate reports
   `EXPIRED`). All three, plus the four create-time limit codes and `TOO_MANY_PROCESSES`, are
   mapped to their own `TamgaApiException` subclasses.
-- **16 of 24 `ValidationCode` values are reachable, and the scope story has changed twice over.**
+- **19 of 24 `ValidationCode` values are reachable, and the scope story has changed twice over.**
   Model all 24 with lenient/unknown-value decoding (`@JsonEnumDefaultValue` on `UNKNOWN`), but
-  don't build UI/UX around the 8 that are declared and never emitted (`BANNED`, `TOO_MANY_USERS`,
-  `HEARTBEAT_DEAD`, `HEARTBEAT_NOT_STARTED`, `COMPONENTS_SCOPE_MISMATCH`,
-  `CHECKSUM_SCOPE_MISMATCH`, `VERSION_SCOPE_MISMATCH`, and `NOT_FOUND`, which surfaces as an
-  HTTP 404 instead of this code). The `Scope` fields split three ways now:
+  don't build UI/UX around the 5 that are declared and never emitted (`BANNED`,
+  `COMPONENTS_SCOPE_MISMATCH`, `CHECKSUM_SCOPE_MISMATCH`, `VERSION_SCOPE_MISMATCH`, and
+  `NOT_FOUND`, which surfaces as an HTTP 404 instead of this code). `HEARTBEAT_NOT_STARTED`/
+  `HEARTBEAT_DEAD` come from the fingerprint scope under `require_heartbeat`, `TOO_MANY_USERS`
+  from all three validate routes; none joins `overLimit()`. The `Scope` fields split three ways
+  now:
   - `product`/`policy`/`user`/`environment` — enforced, as always.
   - `entitlements`/`fingerprint` — **now genuinely enforced**, so `ENTITLEMENTS_MISSING` and
     `FINGERPRINT_SCOPE_MISMATCH` are real verdicts. `entitlements` takes entitlement **codes**
