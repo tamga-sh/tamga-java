@@ -653,6 +653,13 @@ public final class TamgaClient {
    * <p>Since the API patch a same-license conflict names the existing machine in
    * {@code meta.machineId}; that is read first with one {@link #getMachine}, and the
    * {@code filter[license]}-narrowed search is the fallback for a conflict without {@code meta}.
+   *
+   * <p><b>{@link #getMachine} is not scoped to the caller's license</b> (see its Javadoc): any
+   * credential with {@code machine.read} can fetch any machine in the account, so a row it returns
+   * is an optimization hint, never a trust boundary. The fast path therefore accepts it only when
+   * {@link Machine#fingerprint()} matches the fingerprint being activated exactly -- the same
+   * guard {@link #findMachineByFingerprint} applies -- and falls through to that license-scoped
+   * search on any mismatch, exactly as it already does when {@code meta} names no machine at all.
    */
   private Machine recoverTakenFingerprint(CreateMachineOptions options, ActivationOptions opts,
       TamgaApiException failure) {
@@ -661,11 +668,16 @@ public final class TamgaClient {
       return null;
     }
     // Fast path: a same-license conflict names the machine, so one read replaces the search. The
-    // server sends meta.machineId only for the requested license, so the row is ours to adopt.
+    // server sends meta.machineId only for the requested license, so the row is ours to adopt --
+    // but only once its fingerprint is confirmed, since getMachine itself proves nothing about
+    // license ownership.
     String namedId = ((TamgaApiException.FingerprintTakenException) failure).existingMachineId();
     if (namedId != null) {
       try {
-        return getMachine(namedId);
+        Machine named = getMachine(namedId);
+        if (named != null && options.fingerprint().equals(named.fingerprint())) {
+          return named;
+        }
       } catch (TamgaApiException.NotFoundException gone) {
         // Deleted between the conflict and this read. The search below finds nothing and the
         // caller rethrows the conflict -- never this 404.

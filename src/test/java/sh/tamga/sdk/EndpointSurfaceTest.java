@@ -385,6 +385,33 @@ class EndpointSurfaceTest {
   }
 
   @Test
+  void reuseFallsBackToTheSearchWhenTheNamedMachinesFingerprintDoesNotMatch() throws Exception {
+    // getMachine is not scoped to the caller's license (any machine.read credential can fetch
+    // any machine in the account), so meta.machineId is only an optimization hint, never a trust
+    // boundary: a fast-path row whose fingerprint does not match what was activated must not be
+    // adopted blindly, and must fall through to the license-scoped search exactly as the no-meta
+    // case already does.
+    enqueueSameLicenseConflict("mach-9");
+    enqueueJson("{\"data\":" + machineResource("mach-9", "fp-other", "ALIVE") + "}");
+    enqueueJson(machinePage(pageMeta(1, 100, 1, 1), machineResource("mach-42", "fp-1", "ALIVE")));
+    enqueueJson("{\"data\":{\"id\":\"lic-1\",\"type\":\"licenses\",\"attributes\":{}},"
+        + "\"meta\":{\"ts\":\"2026-08-21T10:00:00Z\",\"valid\":true,\"detail\":\"d\","
+        + "\"code\":\"VALID\"}}");
+
+    ActivationResult result = client.activateMachine(CreateMachineOptions.of("fp-1", "lic-1"),
+        null, ActivationOptions.defaults().reuseTakenFingerprint(true));
+
+    assertThat(server.takeRequest().getTarget()).isEqualTo("/v1/accounts/acct-123/machines");
+    assertThat(server.takeRequest().getTarget())
+        .isEqualTo("/v1/accounts/acct-123/machines/mach-9");
+    assertThat(server.takeRequest().getTarget()).contains("filter%5Blicense%5D=lic-1");
+    assertThat(server.takeRequest().getTarget())
+        .isEqualTo("/v1/accounts/acct-123/licenses/lic-1/actions/validate");
+    assertThat(result.machine().id()).isEqualTo("mach-42");
+    assertThat(server.getRequestCount()).isEqualTo(4);
+  }
+
+  @Test
   void reuseFallsBackToTheSearchWhenTheNamedMachineIsGone() throws Exception {
     // Deleted between the conflict and the read: the 404 must not leak, the search runs, and
     // finding nothing re-raises the original conflict.
