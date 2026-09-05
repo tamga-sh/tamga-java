@@ -13,7 +13,7 @@ class ValidationCodeTest {
   }
 
   @Test
-  void exactlySixteenCodesAreReachable() {
+  void exactlyNineteenCodesAreReachable() {
     long reachable = 0;
     for (ValidationCode code : ValidationCode.values()) {
       if (code.reachable()) {
@@ -21,7 +21,7 @@ class ValidationCodeTest {
       }
     }
 
-    assertThat(reachable).isEqualTo(16);
+    assertThat(reachable).isEqualTo(19);
   }
 
   @Test
@@ -57,6 +57,24 @@ class ValidationCodeTest {
         .isEqualTo(ValidationCode.TOO_MUCH_MEMORY);
     assertThat(ValidationCode.fromMachineLimitErrorCode("DISK_LIMIT_EXCEEDED"))
         .isEqualTo(ValidationCode.TOO_MUCH_DISK);
+  }
+
+  @Test
+  void tooManyProcessesMapsLikeTheOtherCreateTimeLimits() {
+    // POST /processes answers it as a 422 and validation emits it as TOO_MANY_PROCESSES: the one
+    // code spelled identically on both surfaces, and the one this mapping was missing.
+    assertThat(ValidationCode.fromMachineLimitErrorCode("TOO_MANY_PROCESSES"))
+        .isEqualTo(ValidationCode.TOO_MANY_PROCESSES);
+  }
+
+  @Test
+  void heartbeatAndUsersVerdictsAreReachableSinceTheApiPatch() {
+    assertThat(ValidationCode.HEARTBEAT_NOT_STARTED.reachable()).isTrue();
+    assertThat(ValidationCode.HEARTBEAT_DEAD.reachable()).isTrue();
+    assertThat(ValidationCode.TOO_MANY_USERS.reachable()).isTrue();
+    // None of the three is a seat limit, so none triggers the activation rollback.
+    assertThat(ValidationCode.HEARTBEAT_DEAD.overLimit()).isFalse();
+    assertThat(ValidationCode.TOO_MANY_USERS.overLimit()).isFalse();
   }
 
   @Test

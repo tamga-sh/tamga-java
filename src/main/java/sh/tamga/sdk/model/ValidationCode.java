@@ -9,7 +9,7 @@ import com.fasterxml.jackson.annotation.JsonEnumDefaultValue;
  * <p>{@code code} is stable and is what callers should branch on. The sibling {@code detail} field
  * is human-readable text whose wording may change between server versions -- never match on it.
  *
- * <p>All 24 wire values are modeled for schema completeness, but <b>only 16 are reachable</b>
+ * <p>All 24 wire values are modeled for schema completeness, but <b>only 19 are reachable</b>
  * against the server today. Each constant below is marked reachable or unreachable; do not build
  * product behaviour around an unreachable one. Unknown future values decode to {@link #UNKNOWN}
  * rather than throwing, so a server-side addition can never break a released SDK.
@@ -63,11 +63,20 @@ public enum ValidationCode {
    * asserts nothing and can never produce this code.
    */
   ENTITLEMENTS_MISSING,
-  /** Unreachable: declared in the server's enum, never emitted. */
+  /**
+   * Users over {@code policy.max_users}, on all three validate endpoints. Reachable since the API
+   * patch. Not an over-limit code.
+   */
   TOO_MANY_USERS,
-  /** Unreachable: declared in the server's enum, never emitted. */
+  /**
+   * {@code scope.fingerprint} matched a machine whose last ping is outside the window, under
+   * {@code policy.require_heartbeat}. Reachable since the API patch; never emitted by a ping.
+   */
   HEARTBEAT_DEAD,
-  /** Unreachable: declared in the server's enum, never emitted. */
+  /**
+   * {@code scope.fingerprint} matched a machine that has never pinged, under
+   * {@code policy.require_heartbeat}. Reachable since the API patch.
+   */
   HEARTBEAT_NOT_STARTED,
   /**
    * {@code scope.fingerprint} was set and no machine on the license carries it. Reachable.
@@ -119,10 +128,12 @@ public enum ValidationCode {
    *
    * <p>Machine creation enforces the policy's machine, core, memory and disk limits and rejects
    * with {@code 422 MACHINE_LIMIT_EXCEEDED} / {@code CORE_LIMIT_EXCEEDED} /
-   * {@code MEMORY_LIMIT_EXCEEDED} / {@code DISK_LIMIT_EXCEEDED}. Validation reports the same four
-   * conditions under different names, so an over-limit activation would otherwise surface as two
-   * unrelated failure vocabularies depending on the policy's overage strategy. This mapping is
-   * what lets {@code TamgaClient.activateMachine} report both as the same outcome.
+   * {@code MEMORY_LIMIT_EXCEEDED} / {@code DISK_LIMIT_EXCEEDED}, and {@code POST /processes} with
+   * {@code 422 TOO_MANY_PROCESSES} -- the one code spelled identically on both surfaces. Validation
+   * reports the same conditions under (mostly) different names, so an over-limit activation would
+   * otherwise surface as two unrelated failure vocabularies depending on the policy's overage
+   * strategy. This mapping is what lets {@code TamgaClient.activateMachine} report both as the same
+   * outcome.
    *
    * @param errorCode a {@code TamgaApiException.code()} value; {@code null} is tolerated
    */
@@ -139,13 +150,15 @@ public enum ValidationCode {
         return TOO_MUCH_MEMORY;
       case "DISK_LIMIT_EXCEEDED":
         return TOO_MUCH_DISK;
+      case "TOO_MANY_PROCESSES":
+        return TOO_MANY_PROCESSES;
       default:
         return null;
     }
   }
 
   /**
-   * Returns whether this code is one of the 16 the server can actually emit today. Useful for
+   * Returns whether this code is one of the 19 the server can actually emit today. Useful for
    * assertions and diagnostics; product logic should switch on the constant itself.
    */
   public boolean reachable() {
@@ -166,6 +179,9 @@ public enum ValidationCode {
       case TOO_MUCH_DISK:
       case TOO_MANY_PROCESSES:
       case TOO_MANY_USES:
+      case TOO_MANY_USERS:
+      case HEARTBEAT_DEAD:
+      case HEARTBEAT_NOT_STARTED:
         return true;
       default:
         return false;

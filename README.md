@@ -442,7 +442,7 @@ Three conditions are distinguishable, all subclasses of `TamgaCheckoutException`
 |---|---|---|
 | `UnknownSigningKeyException` | The file names a key the set does not hold. | Refresh the key set or ship an update — the file may well be genuine. |
 | `SigningKeyNotPublishedException` | The file's `kid` is `keyId("")`, so the issuing account never published a public key. A subclass of the above. | Refetching cannot help; the account's key column has to be populated server-side. |
-| `NoUsableSigningKeyException` | The set holds no usable Ed25519 key at all. | Check what was pinned or fetched. An empty *published* set is normal for an account that has never rotated. |
+| `NoUsableSigningKeyException` | The set holds no usable Ed25519 key at all. | Check what was pinned or fetched. An empty *published* set marks a pre-patch server: since the API patch every account publishes its key from creation. |
 
 Three things are worth knowing before building on this:
 
@@ -576,10 +576,12 @@ boundaries, not oversights.
   (this SDK used to state it did not, and never read it — a machine file consequently verified
   forever), but the server never re-checks an already-issued offline file, so the `ttl` you
   requested at checkout is only as binding as the client that reads it.
-- **8 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled for
+- **5 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled for
   forward-compatibility, and `ValidationCode.reachable()` reports which. Do not build behaviour on
   an unreachable one. `ENTITLEMENTS_MISSING` and `FINGERPRINT_SCOPE_MISMATCH` moved into the
-  reachable set once the server started enforcing those two scope fields.
+  reachable set once the server started enforcing those two scope fields, and
+  `HEARTBEAT_NOT_STARTED`, `HEARTBEAT_DEAD` (fingerprint scope under `require_heartbeat`) and
+  `TOO_MANY_USERS` are reachable since the API patch.
 - **Six `Scope` fields are enforced** — product, policy, user, environment, and now also
   `fingerprint` and `entitlements`, which used to be parsed and ignored. `entitlements` takes
   entitlement *codes*, compared case-insensitively, and is satisfied by policy-inherited
@@ -634,8 +636,10 @@ boundaries, not oversights.
   and then derives `heartbeat_status` from that same timestamp, so it always answers `ALIVE` or
   `RESURRECTED`. An earlier version of the bullet above framed the keep-pinging rule around "a
   `DEAD` reading from a ping" — the rule is right, but that observation cannot happen on that
-  route. `reset-heartbeat` and `create` likewise only ever yield `NOT_STARTED`, and `validate`
-  never returns `HEARTBEAT_DEAD` at all.
+  route. `reset-heartbeat` and `create` likewise only ever yield `NOT_STARTED`. `validate` is the
+  exception: since the API patch it can genuinely answer `HEARTBEAT_DEAD` (and
+  `HEARTBEAT_NOT_STARTED`) once `scope.fingerprint` is set under `policy.require_heartbeat`, so a
+  `case DEAD` branch belongs on a validate response, never on a ping tick callback.
 - **`DEAD` is still a real server state**, just not one a ping shows, and it does not mean the
   machine was culled. It means only that the last ping is older than the window: the server
   computes it from `last_heartbeat_at` alone and never consults `policy.require_heartbeat`, which

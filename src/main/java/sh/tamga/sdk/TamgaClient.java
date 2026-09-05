@@ -645,16 +645,43 @@ public final class TamgaClient {
    * Resolves a {@code 409 FINGERPRINT_TAKEN} to the machine that already holds the fingerprint, or
    * {@code null} when that is not what happened or the row cannot be found on this license.
    *
-   * <p>Deliberately narrow. It fires only on that one error code, only when the caller opted in,
-   * and only for a machine the {@code filter[license]} narrowing proves belongs to the license
-   * being activated against -- a machine resource carries no license id of its own, so a row found
-   * any other way could not be shown to be the right one.
+   * <p>Deliberately narrow. It fires only on that one error code and only when the caller opted
+   * in. The fallback search below additionally only accepts a machine the {@code filter[license]}
+   * narrowing proves belongs to the license being activated against -- a machine resource carries
+   * no license id of its own, so a row found any other way could not be shown to be the right one.
+   *
+   * <p>Since the API patch a same-license conflict names the existing machine in
+   * {@code meta.machineId}; that is read first with one {@link #getMachine}, and the
+   * {@code filter[license]}-narrowed search is the fallback for a conflict without {@code meta}.
+   *
+   * <p><b>{@link #getMachine} is not scoped to the caller's license</b> (see its Javadoc): any
+   * credential with {@code machine.read} can fetch any machine in the account, so a row it returns
+   * is an optimization hint, never a trust boundary. The fast path therefore accepts it only when
+   * {@link Machine#fingerprint()} matches the fingerprint being activated exactly -- the same
+   * guard {@link #findMachineByFingerprint} applies -- and falls through to that license-scoped
+   * search on any mismatch, exactly as it already does when {@code meta} names no machine at all.
    */
   private Machine recoverTakenFingerprint(CreateMachineOptions options, ActivationOptions opts,
       TamgaApiException failure) {
     if (!opts.reusesTakenFingerprint()
         || !(failure instanceof TamgaApiException.FingerprintTakenException)) {
       return null;
+    }
+    // Fast path: a same-license conflict names the machine, so one read replaces the search. The
+    // server sends meta.machineId only for the requested license, so the row is ours to adopt --
+    // but only once its fingerprint is confirmed, since getMachine itself proves nothing about
+    // license ownership.
+    String namedId = ((TamgaApiException.FingerprintTakenException) failure).existingMachineId();
+    if (namedId != null) {
+      try {
+        Machine named = getMachine(namedId);
+        if (named != null && options.fingerprint().equals(named.fingerprint())) {
+          return named;
+        }
+      } catch (TamgaApiException.NotFoundException gone) {
+        // Deleted between the conflict and this read. The search below finds nothing and the
+        // caller rethrows the conflict -- never this 404.
+      }
     }
     return findMachineByFingerprint(options.fingerprint(), options.licenseId());
   }

@@ -243,12 +243,14 @@ source doc for the full set, including analytics/EE items that don't touch this 
   three expiration strategies an expired license still authenticates and validate reports
   `EXPIRED`). All three, plus the four create-time limit codes and `TOO_MANY_PROCESSES`, are
   mapped to their own `TamgaApiException` subclasses.
-- **16 of 24 `ValidationCode` values are reachable, and the scope story has changed twice over.**
+- **19 of 24 `ValidationCode` values are reachable, and the scope story has changed twice over.**
   Model all 24 with lenient/unknown-value decoding (`@JsonEnumDefaultValue` on `UNKNOWN`), but
-  don't build UI/UX around the 8 that are declared and never emitted (`BANNED`, `TOO_MANY_USERS`,
-  `HEARTBEAT_DEAD`, `HEARTBEAT_NOT_STARTED`, `COMPONENTS_SCOPE_MISMATCH`,
-  `CHECKSUM_SCOPE_MISMATCH`, `VERSION_SCOPE_MISMATCH`, and `NOT_FOUND`, which surfaces as an
-  HTTP 404 instead of this code). The `Scope` fields split three ways now:
+  don't build UI/UX around the 5 that are declared and never emitted (`BANNED`,
+  `COMPONENTS_SCOPE_MISMATCH`, `CHECKSUM_SCOPE_MISMATCH`, `VERSION_SCOPE_MISMATCH`, and
+  `NOT_FOUND`, which surfaces as an HTTP 404 instead of this code). `HEARTBEAT_NOT_STARTED`/
+  `HEARTBEAT_DEAD` come from the fingerprint scope under `require_heartbeat`, `TOO_MANY_USERS`
+  from all three validate routes; none joins `overLimit()`. The `Scope` fields split three ways
+  now:
   - `product`/`policy`/`user`/`environment` — enforced, as always.
   - `entitlements`/`fingerprint` — **now genuinely enforced**, so `ENTITLEMENTS_MISSING` and
     `FINGERPRINT_SCOPE_MISMATCH` are real verdicts. `entitlements` takes entitlement **codes**
@@ -447,10 +449,12 @@ source doc for the full set, including analytics/EE items that don't touch this 
   `ping-heartbeat` writes `last_heartbeat_at = NOW()` and then derives `heartbeat_status` from that
   same timestamp (`heartbeat_status_within`, `machines/model.rs:124-146`), so the measured age is
   ~0 and the answer is always `ALIVE` or `RESURRECTED`. `reset-heartbeat` nulls the column
-  (`NOT_STARTED`), `create` never sets it (`NOT_STARTED`), and `validate_license.rs` never
-  constructs `ValidationCode::HeartbeatDead` at all. Any `case DEAD` branch in a tick callback is
-  therefore dead code — reframe or drop the branch, but **do not** delete the enum constant or the
-  model field, which are part of the wire model.
+  (`NOT_STARTED`) and `create` never sets it (`NOT_STARTED`) either, so any `case DEAD` branch in a
+  *ping tick callback* is dead code — reframe or drop it, but **do not** delete the enum constant
+  or the model field, which are part of the wire model. `validate_license.rs` is the exception:
+  since the API patch it does construct `ValidationCode::HeartbeatDead` (and
+  `HeartbeatNotStarted`) when `scope.fingerprint` is set under `policy.require_heartbeat`, so a
+  `case DEAD` branch on a *validate* response is genuinely reachable.
 - **`DEAD` is real, and in this SDK it is reachable — through the checkout family.** It means only
   that the last ping is older than the window: `Machine::heartbeat_status*` derives it from
   `last_heartbeat_at` and never reads `policy.require_heartbeat`, which defaults to `FALSE` and is

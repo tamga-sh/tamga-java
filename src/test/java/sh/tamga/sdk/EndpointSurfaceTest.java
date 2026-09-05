@@ -96,6 +96,21 @@ class EndpointSurfaceTest {
         + ",\"totalPages\":" + totalPages + "}}";
   }
 
+  /**
+   * The API patch's wire shape for a same-license conflict: {@code status} as a JSON number (the
+   * D18 representation) and {@code meta.machineId} naming the machine already holding the
+   * fingerprint. The server sends {@code meta} only when that machine is on the requested license.
+   */
+  private void enqueueSameLicenseConflict(String machineId) {
+    server.enqueue(new MockResponse.Builder()
+        .code(409)
+        .addHeader("Content-Type", "application/vnd.api+json")
+        .body("{\"errors\":[{\"id\":\"01920000-0000-7000-8000-000000000001\",\"status\":409,"
+            + "\"code\":\"FINGERPRINT_TAKEN\",\"title\":\"Conflict\",\"detail\":\"taken\","
+            + "\"meta\":{\"machineId\":\"" + machineId + "\"}}]}")
+        .build());
+  }
+
   // ------------------------------------------------------------------ reads
 
   @Test
@@ -345,6 +360,84 @@ class EndpointSurfaceTest {
     assertThatThrownBy(() -> client.activateMachine(CreateMachineOptions.of("fp-1", "lic-1"), null,
         ActivationOptions.defaults().reuseTakenFingerprint(true)))
         .isInstanceOf(TamgaApiException.UnauthorizedException.class);
+    assertThat(server.getRequestCount()).isEqualTo(1);
+  }
+
+  @Test
+  void reuseAdoptsTheMachineTheConflictNamesWithoutSearching() throws Exception {
+    enqueueSameLicenseConflict("mach-9");
+    enqueueJson("{\"data\":" + machineResource("mach-9", "fp-1", "ALIVE") + "}");
+    enqueueJson("{\"data\":{\"id\":\"lic-1\",\"type\":\"licenses\",\"attributes\":{}},"
+        + "\"meta\":{\"ts\":\"2026-08-21T10:00:00Z\",\"valid\":true,\"detail\":\"d\","
+        + "\"code\":\"VALID\"}}");
+
+    ActivationResult result = client.activateMachine(CreateMachineOptions.of("fp-1", "lic-1"),
+        null, ActivationOptions.defaults().reuseTakenFingerprint(true));
+
+    assertThat(server.takeRequest().getTarget()).isEqualTo("/v1/accounts/acct-123/machines");
+    // One GET by id in place of the paginated search.
+    assertThat(server.takeRequest().getTarget())
+        .isEqualTo("/v1/accounts/acct-123/machines/mach-9");
+    assertThat(server.takeRequest().getTarget())
+        .isEqualTo("/v1/accounts/acct-123/licenses/lic-1/actions/validate");
+    assertThat(result.machine().id()).isEqualTo("mach-9");
+    assertThat(server.getRequestCount()).isEqualTo(3);
+  }
+
+  @Test
+  void reuseFallsBackToTheSearchWhenTheNamedMachinesFingerprintDoesNotMatch() throws Exception {
+    // getMachine is not scoped to the caller's license (any machine.read credential can fetch
+    // any machine in the account), so meta.machineId is only an optimization hint, never a trust
+    // boundary: a fast-path row whose fingerprint does not match what was activated must not be
+    // adopted blindly, and must fall through to the license-scoped search exactly as the no-meta
+    // case already does.
+    enqueueSameLicenseConflict("mach-9");
+    enqueueJson("{\"data\":" + machineResource("mach-9", "fp-other", "ALIVE") + "}");
+    enqueueJson(machinePage(pageMeta(1, 100, 1, 1), machineResource("mach-42", "fp-1", "ALIVE")));
+    enqueueJson("{\"data\":{\"id\":\"lic-1\",\"type\":\"licenses\",\"attributes\":{}},"
+        + "\"meta\":{\"ts\":\"2026-08-21T10:00:00Z\",\"valid\":true,\"detail\":\"d\","
+        + "\"code\":\"VALID\"}}");
+
+    ActivationResult result = client.activateMachine(CreateMachineOptions.of("fp-1", "lic-1"),
+        null, ActivationOptions.defaults().reuseTakenFingerprint(true));
+
+    assertThat(server.takeRequest().getTarget()).isEqualTo("/v1/accounts/acct-123/machines");
+    assertThat(server.takeRequest().getTarget())
+        .isEqualTo("/v1/accounts/acct-123/machines/mach-9");
+    assertThat(server.takeRequest().getTarget()).contains("filter%5Blicense%5D=lic-1");
+    assertThat(server.takeRequest().getTarget())
+        .isEqualTo("/v1/accounts/acct-123/licenses/lic-1/actions/validate");
+    assertThat(result.machine().id()).isEqualTo("mach-42");
+    assertThat(server.getRequestCount()).isEqualTo(4);
+  }
+
+  @Test
+  void reuseFallsBackToTheSearchWhenTheNamedMachineIsGone() throws Exception {
+    // Deleted between the conflict and the read: the 404 must not leak, the search runs, and
+    // finding nothing re-raises the original conflict.
+    enqueueSameLicenseConflict("mach-9");
+    enqueueError(404, "NOT_FOUND", "gone");
+    enqueueJson(machinePage(pageMeta(1, 100, 0, 0)));
+
+    assertThatThrownBy(() -> client.activateMachine(CreateMachineOptions.of("fp-1", "lic-1"), null,
+        ActivationOptions.defaults().reuseTakenFingerprint(true)))
+        .isInstanceOf(TamgaApiException.FingerprintTakenException.class);
+    assertThat(server.takeRequest().getTarget()).isEqualTo("/v1/accounts/acct-123/machines");
+    assertThat(server.takeRequest().getTarget())
+        .isEqualTo("/v1/accounts/acct-123/machines/mach-9");
+    assertThat(server.takeRequest().getTarget()).contains("filter%5Blicense%5D=lic-1");
+    assertThat(server.getRequestCount()).isEqualTo(3);
+  }
+
+  @Test
+  void reuseIsStillGatedOnTheOptionEvenWhenTheConflictNamesTheMachine() throws Exception {
+    enqueueSameLicenseConflict("mach-9");
+
+    assertThatThrownBy(() -> client.activateMachine(CreateMachineOptions.of("fp-1", "lic-1"), null))
+        .isInstanceOf(TamgaApiException.FingerprintTakenException.class)
+        .satisfies(e -> assertThat(
+            ((TamgaApiException.FingerprintTakenException) e).existingMachineId())
+            .isEqualTo("mach-9"));
     assertThat(server.getRequestCount()).isEqualTo(1);
   }
 
