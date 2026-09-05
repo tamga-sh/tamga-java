@@ -636,8 +636,10 @@ boundaries, not oversights.
   and then derives `heartbeat_status` from that same timestamp, so it always answers `ALIVE` or
   `RESURRECTED`. An earlier version of the bullet above framed the keep-pinging rule around "a
   `DEAD` reading from a ping" — the rule is right, but that observation cannot happen on that
-  route. `reset-heartbeat` and `create` likewise only ever yield `NOT_STARTED`, and `validate`
-  never returns `HEARTBEAT_DEAD` at all.
+  route. `reset-heartbeat` and `create` likewise only ever yield `NOT_STARTED`. `validate` is the
+  exception: since the API patch it can genuinely answer `HEARTBEAT_DEAD` (and
+  `HEARTBEAT_NOT_STARTED`) once `scope.fingerprint` is set under `policy.require_heartbeat`, so a
+  `case DEAD` branch belongs on a validate response, never on a ping tick callback.
 - **`DEAD` is still a real server state**, just not one a ping shows, and it does not mean the
   machine was culled. It means only that the last ping is older than the window: the server
   computes it from `last_heartbeat_at` alone and never consults `policy.require_heartbeat`, which

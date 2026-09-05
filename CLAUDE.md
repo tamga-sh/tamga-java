@@ -449,10 +449,12 @@ source doc for the full set, including analytics/EE items that don't touch this 
   `ping-heartbeat` writes `last_heartbeat_at = NOW()` and then derives `heartbeat_status` from that
   same timestamp (`heartbeat_status_within`, `machines/model.rs:124-146`), so the measured age is
   ~0 and the answer is always `ALIVE` or `RESURRECTED`. `reset-heartbeat` nulls the column
-  (`NOT_STARTED`), `create` never sets it (`NOT_STARTED`), and `validate_license.rs` never
-  constructs `ValidationCode::HeartbeatDead` at all. Any `case DEAD` branch in a tick callback is
-  therefore dead code — reframe or drop the branch, but **do not** delete the enum constant or the
-  model field, which are part of the wire model.
+  (`NOT_STARTED`) and `create` never sets it (`NOT_STARTED`) either, so any `case DEAD` branch in a
+  *ping tick callback* is dead code — reframe or drop it, but **do not** delete the enum constant
+  or the model field, which are part of the wire model. `validate_license.rs` is the exception:
+  since the API patch it does construct `ValidationCode::HeartbeatDead` (and
+  `HeartbeatNotStarted`) when `scope.fingerprint` is set under `policy.require_heartbeat`, so a
+  `case DEAD` branch on a *validate* response is genuinely reachable.
 - **`DEAD` is real, and in this SDK it is reachable — through the checkout family.** It means only
   that the last ping is older than the window: `Machine::heartbeat_status*` derives it from
   `last_heartbeat_at` and never reads `policy.require_heartbeat`, which defaults to `FALSE` and is

@@ -645,10 +645,10 @@ public final class TamgaClient {
    * Resolves a {@code 409 FINGERPRINT_TAKEN} to the machine that already holds the fingerprint, or
    * {@code null} when that is not what happened or the row cannot be found on this license.
    *
-   * <p>Deliberately narrow. It fires only on that one error code, only when the caller opted in,
-   * and only for a machine the {@code filter[license]} narrowing proves belongs to the license
-   * being activated against -- a machine resource carries no license id of its own, so a row found
-   * any other way could not be shown to be the right one.
+   * <p>Deliberately narrow. It fires only on that one error code and only when the caller opted
+   * in. The fallback search below additionally only accepts a machine the {@code filter[license]}
+   * narrowing proves belongs to the license being activated against -- a machine resource carries
+   * no license id of its own, so a row found any other way could not be shown to be the right one.
    *
    * <p>Since the API patch a same-license conflict names the existing machine in
    * {@code meta.machineId}; that is read first with one {@link #getMachine}, and the

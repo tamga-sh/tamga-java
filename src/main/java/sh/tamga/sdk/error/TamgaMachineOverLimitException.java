@@ -16,7 +16,9 @@ import sh.tamga.sdk.model.ValidationMeta;
  *   <li><b>At validation.</b> The create-time check runs through the policy's overage strategy, so
  *       under {@code ALLOW_ACCESS} or {@code ALLOW_1_25X_OVERAGE} creation still succeeds and the
  *       limit only appears in the validate verdict. The machine is deleted before this is thrown
- *       and {@link #rolledBack()} is {@code true}.
+ *       and {@link #rolledBack()} is {@code true} -- unless the row was adopted through
+ *       {@code ActivationOptions.reuseTakenFingerprint}, in which case it predates this call and
+ *       is never deleted; see {@link #rolledBack()} for the exact split.
  * </ul>
  *
  * <p>Either way {@link #validationMeta()} names the limit, using the validation vocabulary
@@ -43,7 +45,9 @@ public final class TamgaMachineOverLimitException extends RuntimeException {
    *
    * @param validationMeta the verdict, whose code identifies the limit
    * @param rolledBack {@code true} when a machine row was created and then deleted, {@code false}
-   *     when the server refused to create one at all
+   *     when the server refused to create one at all OR when the row was adopted through
+   *     {@code ActivationOptions.reuseTakenFingerprint} and predates this call, so it is never
+   *     deleted -- see {@link #rolledBack()}
    * @param cause the underlying API error for the create-time path, or {@code null}
    */
   public TamgaMachineOverLimitException(ValidationMeta validationMeta, boolean rolledBack,
