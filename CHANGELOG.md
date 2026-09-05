@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.4](https://github.com/tamga-sh/tamga-java/compare/v1.4.3...v1.4.4) (2026-09-05)
+
+
+### Bug Fixes
+
+* carry the error meta, type the key-material 422s, and adopt the machine a 409 names ([9823a3a](https://github.com/tamga-sh/tamga-java/commit/9823a3a63118f18534ed3916593c6a0fdee3a436))
+* **checkout:** reject a fast-path machine whose fingerprint doesn't match ([795aac6](https://github.com/tamga-sh/tamga-java/commit/795aac647e7339e5ba45cf48c84068284ce08d73))
+* error meta, key-material 422s, meta.machineId fast path (1.4.4) ([93cba19](https://github.com/tamga-sh/tamga-java/commit/93cba1957e771b5ddbe979f5e1bf0eab49d459c5))
+
 ## [1.4.3](https://github.com/tamga-sh/tamga-java/compare/v1.4.2...v1.4.3) (2026-09-04)
 
 
