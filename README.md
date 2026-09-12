@@ -211,6 +211,40 @@ public key.
 Producing a stable, device-specific fingerprint and deciding your grace-period and enforcement
 policy remain application concerns — see [Known gaps](#known-gaps).
 
+### Entitlements and meters
+
+Every entitlement now carries a `kind`: `FLAG` is the boolean grant entitlements have always been;
+`METER` is a named, per-license counter with its own cap, replacing the old single, global
+`uses`/`max_uses` counter — a license can hold several meters (`"requests"`, `"exports"`, ...),
+each tracked independently. `maxValue()`/`currentValue()` are meaningful only for a `METER`, and
+only on the license-scoped listing (`listEntitlements`/`getEntitlement`); the policy-scoped listing
+carries `maxValue()` alone:
+
+```java
+import sh.tamga.sdk.error.TamgaMeterLimitExceededException;
+import sh.tamga.sdk.model.Entitlement;
+
+Entitlement requests = client.getEntitlement(licenseId, entitlementId);
+if (requests.kind() == Entitlement.Kind.METER) {
+  System.out.printf("%d / %s used%n", requests.currentValue(),
+      requests.maxValue() == null ? "unlimited" : requests.maxValue());
+}
+
+try {
+  // Requires the entitlement to be directly attached to this license -- one only inherited via
+  // the policy has no counter row and answers 404 here. Omit the count to increment by 1.
+  Entitlement updated = client.incrementEntitlementUsage(licenseId, entitlementId);
+  render(updated.currentValue());
+} catch (TamgaMeterLimitExceededException e) {
+  // current_value + increment > max_value. e.entitlementId() names which meter hit its cap.
+  denyRequest(e.entitlementId());
+}
+
+// decrement/reset are floor-at-zero and never raise the limit exception.
+client.decrementEntitlementUsage(licenseId, entitlementId);
+client.resetEntitlementUsage(licenseId, entitlementId);
+```
+
 ### Verifying an offline file
 
 Verify and decrypt an offline `.lic` file that was checked out earlier. `verifyAndDecrypt` fails
@@ -576,12 +610,15 @@ boundaries, not oversights.
   (this SDK used to state it did not, and never read it — a machine file consequently verified
   forever), but the server never re-checks an already-issued offline file, so the `ttl` you
   requested at checkout is only as binding as the client that reads it.
-- **5 of the 24 `ValidationCode` values are unreachable.** All 24 are modelled for
+- **5 of the 23 `ValidationCode` values are unreachable.** All 23 are modelled for
   forward-compatibility, and `ValidationCode.reachable()` reports which. Do not build behaviour on
   an unreachable one. `ENTITLEMENTS_MISSING` and `FINGERPRINT_SCOPE_MISMATCH` moved into the
   reachable set once the server started enforcing those two scope fields, and
   `HEARTBEAT_NOT_STARTED`, `HEARTBEAT_DEAD` (fingerprint scope under `require_heartbeat`) and
-  `TOO_MANY_USERS` are reachable since the API patch.
+  `TOO_MANY_USERS` are reachable since the API patch. The retired global counter's own verdict,
+  `TOO_MANY_USES`, is gone from this vocabulary entirely — its replacement, per-entitlement meters,
+  is enforced by `incrementEntitlementUsage` directly (`422 METER_LIMIT_EXCEEDED`), never by
+  `validate`. See [Entitlements and meters](#entitlements-and-meters).
 - **Six `Scope` fields are enforced** — product, policy, user, environment, and now also
   `fingerprint` and `entitlements`, which used to be parsed and ignored. `entitlements` takes
   entitlement *codes*, compared case-insensitively, and is satisfied by policy-inherited

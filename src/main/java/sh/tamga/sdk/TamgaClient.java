@@ -19,6 +19,7 @@ import sh.tamga.sdk.checkout.SigningKeySet;
 import sh.tamga.sdk.error.TamgaActivationValidationException;
 import sh.tamga.sdk.error.TamgaApiException;
 import sh.tamga.sdk.error.TamgaMachineOverLimitException;
+import sh.tamga.sdk.error.TamgaMeterLimitExceededException;
 import sh.tamga.sdk.error.TamgaTransportException;
 import sh.tamga.sdk.model.ActivationOptions;
 import sh.tamga.sdk.model.ActivationResult;
@@ -918,6 +919,98 @@ public final class TamgaClient {
   /** Drops the cached entitlement set for a license, forcing the next lookup to refetch. */
   public void invalidateEntitlementCache(String licenseId) {
     entitlementCache.invalidate(licenseId);
+  }
+
+  /**
+   * Increments a meter entitlement's usage count by {@code 1}.
+   *
+   * @see #incrementEntitlementUsage(String, String, int)
+   */
+  public Entitlement incrementEntitlementUsage(String licenseId, String entitlementId) {
+    return meterAction(licenseId, entitlementId, "increment", null);
+  }
+
+  /**
+   * Increments a meter entitlement's usage count by {@code increment}.
+   *
+   * <p>Mirrors {@link #pingHeartbeat}'s shape one path segment deeper: a bare action call that
+   * decodes back into the full resource, so the caller sees the fresh
+   * {@link Entitlement#currentValue()} (and {@link Entitlement#maxValue()}) without a second round
+   * trip.
+   *
+   * <p><b>Requires the entitlement to be directly attached to this license.</b> One that is only
+   * inherited via the policy (no {@code license_entitlements} row) answers {@code 404} here --
+   * attach it directly first to start tracking.
+   *
+   * <p>{@code increment} is clamped to a minimum of {@code 1} server-side: {@code 0} or a negative
+   * value is raised to {@code 1}, never rejected.
+   *
+   * @throws TamgaMeterLimitExceededException if {@code current_value + increment > max_value}
+   */
+  public Entitlement incrementEntitlementUsage(String licenseId, String entitlementId,
+      int increment) {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("increment", increment);
+    return meterAction(licenseId, entitlementId, "increment", body);
+  }
+
+  /**
+   * Decrements a meter entitlement's usage count by {@code 1}.
+   *
+   * @see #decrementEntitlementUsage(String, String, int)
+   */
+  public Entitlement decrementEntitlementUsage(String licenseId, String entitlementId) {
+    return meterAction(licenseId, entitlementId, "decrement", null);
+  }
+
+  /**
+   * Decrements a meter entitlement's usage count by {@code decrement}.
+   *
+   * <p>Same shape as {@link #incrementEntitlementUsage(String, String, int)}, one verb over.
+   * {@code current_value} is floored at {@code 0} server-side -- it never goes negative, and this
+   * action never raises {@link TamgaMeterLimitExceededException}. {@code decrement} is clamped to a
+   * minimum of {@code 1} server-side, the same as {@code increment}.
+   *
+   * <p>Requires the entitlement to be directly attached to this license, exactly as
+   * {@link #incrementEntitlementUsage(String, String, int)} does.
+   */
+  public Entitlement decrementEntitlementUsage(String licenseId, String entitlementId,
+      int decrement) {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("decrement", decrement);
+    return meterAction(licenseId, entitlementId, "decrement", body);
+  }
+
+  /**
+   * Resets a meter entitlement's usage count to {@code 0}.
+   *
+   * <p>Mirrors {@link #resetHeartbeat}'s shape one path segment deeper. Requires the entitlement to
+   * be directly attached to this license, exactly as {@link #incrementEntitlementUsage(String,
+   * String, int)} does.
+   */
+  public Entitlement resetEntitlementUsage(String licenseId, String entitlementId) {
+    return meterAction(licenseId, entitlementId, "reset", null);
+  }
+
+  /**
+   * Shared plumbing for the three meter actions above: posts to
+   * {@code .../entitlements/{id}/actions/{verb}} and normalizes a {@code 422
+   * METER_LIMIT_EXCEEDED} into {@link TamgaMeterLimitExceededException}, mirroring how {@code
+   * activateMachine} normalizes a machine-limit rejection into
+   * {@link TamgaMachineOverLimitException}. Only {@code increment} can actually raise the limit
+   * error; {@code decrement} and {@code reset} simply never hit the catch clause.
+   */
+  private Entitlement meterAction(String licenseId, String entitlementId, String verb,
+      Map<String, Object> body) {
+    try {
+      JsonNode root = transport.postJson(
+          Arrays.asList("licenses", licenseId, "entitlements", entitlementId, "actions", verb),
+          body);
+      return Entitlement.fromResourceNode(root.get("data"));
+    } catch (TamgaApiException.MeterLimitExceededException e) {
+      String resolvedEntitlementId = e.entitlementId() == null ? entitlementId : e.entitlementId();
+      throw new TamgaMeterLimitExceededException(resolvedEntitlementId, e);
+    }
   }
 
   // ----------------------------------------------------------------- releases

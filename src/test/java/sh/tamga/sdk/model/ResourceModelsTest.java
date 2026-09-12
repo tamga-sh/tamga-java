@@ -19,15 +19,79 @@ class ResourceModelsTest {
   void entitlementDecodesEveryField() throws Exception {
     Entitlement entitlement = Entitlement.fromResourceNode(node(
         "{\"id\":\"ent-1\",\"type\":\"entitlements\",\"attributes\":{\"code\":\"PRO\","
-            + "\"name\":\"Pro plan\",\"created\":\"2026-08-20T10:00:00Z\","
+            + "\"name\":\"Pro plan\",\"kind\":\"flag\",\"created\":\"2026-08-20T10:00:00Z\","
             + "\"updated\":\"2026-08-21T11:00:00Z\",\"metadata\":{\"tier\":\"gold\"}}}"));
 
     assertThat(entitlement.id()).isEqualTo("ent-1");
     assertThat(entitlement.code()).isEqualTo("PRO");
     assertThat(entitlement.name()).isEqualTo("Pro plan");
+    assertThat(entitlement.kind()).isEqualTo(Entitlement.Kind.FLAG);
     assertThat(entitlement.created()).isEqualTo(Instant.parse("2026-08-20T10:00:00Z"));
     assertThat(entitlement.updated()).isEqualTo(Instant.parse("2026-08-21T11:00:00Z"));
     assertThat(entitlement.metadata()).containsEntry("tier", "gold");
+  }
+
+  @Test
+  void meterEntitlementDecodesTheLicenseScopedFields() throws Exception {
+    // The license-scoped listing (GET /licenses/{id}/entitlements) carries both max_value and
+    // current_value, plus inherited -- the shape this type usually decodes.
+    Entitlement entitlement = Entitlement.fromResourceNode(node(
+        "{\"id\":\"ent-2\",\"type\":\"entitlements\",\"attributes\":{\"code\":\"REQUESTS\","
+            + "\"name\":\"API Requests\",\"kind\":\"meter\",\"inherited\":false,"
+            + "\"max_value\":1000,\"current_value\":650}}"));
+
+    assertThat(entitlement.kind()).isEqualTo(Entitlement.Kind.METER);
+    assertThat(entitlement.inherited()).isFalse();
+    assertThat(entitlement.maxValue()).isEqualTo(1000);
+    assertThat(entitlement.currentValue()).isEqualTo(650);
+  }
+
+  @Test
+  void meterEntitlementDecodesTheUnlimitedCapAsNull() throws Exception {
+    Entitlement entitlement = Entitlement.fromResourceNode(node(
+        "{\"id\":\"ent-3\",\"attributes\":{\"code\":\"EXPORTS\",\"kind\":\"meter\","
+            + "\"max_value\":null,\"current_value\":0}}"));
+
+    assertThat(entitlement.maxValue()).isNull();
+    assertThat(entitlement.currentValue()).isEqualTo(0);
+  }
+
+  @Test
+  void meterEntitlementDecodesThePolicyScopedShapeWithNoCurrentValue() throws Exception {
+    // GET /policies/{id}/entitlements carries only the policy-level default cap: no
+    // current_value (usage is never pooled at the policy level) and no inherited (that concept
+    // only exists at the license level).
+    Entitlement entitlement = Entitlement.fromResourceNode(node(
+        "{\"id\":\"ent-4\",\"attributes\":{\"code\":\"REQUESTS\",\"kind\":\"meter\","
+            + "\"max_value\":500}}"));
+
+    assertThat(entitlement.maxValue()).isEqualTo(500);
+    assertThat(entitlement.currentValue()).isNull();
+    assertThat(entitlement.inherited()).isNull();
+  }
+
+  @Test
+  void anUnrecognizedEntitlementKindDecodesToUnknownRatherThanThrowing() throws Exception {
+    Entitlement entitlement = Entitlement.fromResourceNode(node(
+        "{\"id\":\"ent-5\",\"attributes\":{\"code\":\"FUTURE\",\"kind\":\"invented-next-year\"}}"));
+
+    assertThat(entitlement.kind()).isEqualTo(Entitlement.Kind.UNKNOWN);
+  }
+
+  @Test
+  void missingEntitlementKindDecodesToUnknown() throws Exception {
+    Entitlement entitlement =
+        Entitlement.fromResourceNode(node("{\"id\":\"ent-6\",\"attributes\":{\"code\":\"OLD\"}}"));
+
+    assertThat(entitlement.kind()).isEqualTo(Entitlement.Kind.UNKNOWN);
+  }
+
+  @Test
+  void entitlementKindWireValuesRoundTrip() {
+    assertThat(Entitlement.Kind.fromWireValue("flag")).isEqualTo(Entitlement.Kind.FLAG);
+    assertThat(Entitlement.Kind.fromWireValue("meter")).isEqualTo(Entitlement.Kind.METER);
+    assertThat(Entitlement.Kind.FLAG.wireValue()).isEqualTo("flag");
+    assertThat(Entitlement.Kind.METER.wireValue()).isEqualTo("meter");
   }
 
   @Test
@@ -130,7 +194,7 @@ class ResourceModelsTest {
     License license = License.fromResourceNode(node(
         "{\"id\":\"lic-1\",\"type\":\"licenses\",\"attributes\":{\"key\":\"K\",\"name\":\"Acme\","
             + "\"status\":\"ACTIVE\",\"scheme\":\"ED25519_SIGN\",\"max_machines\":5,"
-            + "\"max_users\":3,\"max_uses\":100,\"machines_count\":2,\"uses\":7,"
+            + "\"max_users\":3,\"machines_count\":2,"
             + "\"protected\":true,\"floating\":true,\"strict\":true,\"encrypted\":true,"
             + "\"suspended\":true,\"created\":\"2026-08-20T10:00:00Z\","
             + "\"updated\":\"2026-08-21T10:00:00Z\",\"expiry\":\"2027-08-20T10:00:00Z\","
@@ -141,9 +205,7 @@ class ResourceModelsTest {
     assertThat(license.scheme()).isEqualTo("ED25519_SIGN");
     assertThat(license.maxMachines()).isEqualTo(5);
     assertThat(license.maxUsers()).isEqualTo(3);
-    assertThat(license.maxUses()).isEqualTo(100);
     assertThat(license.machinesCount()).isEqualTo(2);
-    assertThat(license.uses()).isEqualTo(7);
     assertThat(license.isProtected()).isTrue();
     assertThat(license.floating()).isTrue();
     assertThat(license.strict()).isTrue();

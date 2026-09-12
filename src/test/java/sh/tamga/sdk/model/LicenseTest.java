@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 class LicenseTest {
 
   private static License makeLicense(String key) {
-    return new License("lic_1", key, false, null, 0, null, null, null);
+    return new License("lic_1", key, false, null, null, null, null);
   }
 
   @Test

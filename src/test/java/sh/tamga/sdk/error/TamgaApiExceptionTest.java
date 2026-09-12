@@ -70,6 +70,14 @@ class TamgaApiExceptionTest {
   }
 
   @Test
+  void theMeterLimitCodeMapsToItsOwnType() {
+    // Replaces the retired TOO_MANY_USES validation code, but as a direct action error, never a
+    // validate verdict -- raised by increment, never by decrement or reset.
+    assertThat(dispatch("METER_LIMIT_EXCEEDED", 422))
+        .isInstanceOf(TamgaApiException.MeterLimitExceededException.class);
+  }
+
+  @Test
   void theThreeLicenseAuthRejectionsMapToTheirOwnTypes() {
     // All three are front-door rejections of a license-key credential, and none is retryable:
     // LICENSE_NOT_ALLOWED in particular is a policy configuration precondition, not a bad key.
@@ -274,5 +282,19 @@ class TamgaApiExceptionTest {
         .isEqualTo("mach-7");
     assertThat(((TamgaApiException.FingerprintTakenException) bare).existingMachineId()).isNull();
     assertThat(((TamgaApiException.FingerprintTakenException) blank).existingMachineId()).isNull();
+  }
+
+  @Test
+  void meterLimitExceededExposesTheEntitlementIdOnlyWhenNamed() {
+    ResponseMetadata metadata = new ResponseMetadata("1.8", "EE", "multiplayer", "req-1");
+    TamgaApiException named = TamgaApiException.from(new TamgaError(null, "422",
+        "METER_LIMIT_EXCEEDED", null, "over cap", null,
+        Collections.singletonMap("entitlement_id", "ent-9")), 422, metadata);
+    TamgaApiException bare = TamgaApiException.from(
+        new TamgaError(null, "422", "METER_LIMIT_EXCEEDED", null, "over cap", null), 422, metadata);
+
+    assertThat(((TamgaApiException.MeterLimitExceededException) named).entitlementId())
+        .isEqualTo("ent-9");
+    assertThat(((TamgaApiException.MeterLimitExceededException) bare).entitlementId()).isNull();
   }
 }

@@ -32,7 +32,6 @@ public final class License {
   private final String key;
   private final boolean suspended;
   private final Instant expiry;
-  private final int uses;
   private final Instant lastValidatedAt;
   private final Instant lastCheckInAt;
   private final Map<String, Object> metadata;
@@ -41,7 +40,6 @@ public final class License {
   private final String scheme;
   private final Integer maxMachines;
   private final Integer maxUsers;
-  private final Integer maxUses;
   private final int machinesCount;
   private final Instant lastCheckOutAt;
   private final Instant created;
@@ -51,23 +49,22 @@ public final class License {
   private final boolean strict;
   private final boolean encrypted;
 
-  License(String id, String key, boolean suspended, Instant expiry, int uses,
-      Instant lastValidatedAt, Instant lastCheckInAt, Map<String, Object> metadata) {
-    this(id, key, suspended, expiry, uses, lastValidatedAt, lastCheckInAt, metadata, null, null,
-        null, null, null, null, 0, null, null, null, false, false, false, false);
+  License(String id, String key, boolean suspended, Instant expiry, Instant lastValidatedAt,
+      Instant lastCheckInAt, Map<String, Object> metadata) {
+    this(id, key, suspended, expiry, lastValidatedAt, lastCheckInAt, metadata, null, null, null,
+        null, null, 0, null, null, null, false, false, false, false);
   }
 
   @SuppressWarnings("checkstyle:ParameterNumber")
-  License(String id, String key, boolean suspended, Instant expiry, int uses,
-      Instant lastValidatedAt, Instant lastCheckInAt, Map<String, Object> metadata, String name,
-      String status, String scheme, Integer maxMachines, Integer maxUsers, Integer maxUses,
-      int machinesCount, Instant lastCheckOutAt, Instant created, Instant updated,
-      boolean protectedLicense, boolean floating, boolean strict, boolean encrypted) {
+  License(String id, String key, boolean suspended, Instant expiry, Instant lastValidatedAt,
+      Instant lastCheckInAt, Map<String, Object> metadata, String name, String status,
+      String scheme, Integer maxMachines, Integer maxUsers, int machinesCount,
+      Instant lastCheckOutAt, Instant created, Instant updated, boolean protectedLicense,
+      boolean floating, boolean strict, boolean encrypted) {
     this.id = id;
     this.key = key;
     this.suspended = suspended;
     this.expiry = expiry;
-    this.uses = uses;
     this.lastValidatedAt = lastValidatedAt;
     this.lastCheckInAt = lastCheckInAt;
     this.metadata = metadata;
@@ -76,7 +73,6 @@ public final class License {
     this.scheme = scheme;
     this.maxMachines = maxMachines;
     this.maxUsers = maxUsers;
-    this.maxUses = maxUses;
     this.machinesCount = machinesCount;
     this.lastCheckOutAt = lastCheckOutAt;
     this.created = created;
@@ -101,7 +97,6 @@ public final class License {
         WireNodes.text(attrs, "key"),
         WireNodes.bool(attrs, "suspended"),
         WireNodes.instant(attrs, "expiry"),
-        WireNodes.intOrZero(attrs, "uses"),
         WireNodes.instant(attrs, "last_validated_at"),
         WireNodes.instant(attrs, "last_check_in_at"),
         WireNodes.objectMap(attrs, "metadata"),
@@ -110,7 +105,6 @@ public final class License {
         WireNodes.text(attrs, "scheme"),
         WireNodes.integer(attrs, "max_machines"),
         WireNodes.integer(attrs, "max_users"),
-        WireNodes.integer(attrs, "max_uses"),
         WireNodes.intOrZero(attrs, "machines_count"),
         WireNodes.instant(attrs, "last_check_out_at"),
         WireNodes.instant(attrs, "created"),
@@ -144,11 +138,6 @@ public final class License {
   /** Returns the user limit carried on the license, or {@code null}. */
   public Integer maxUsers() {
     return maxUsers;
-  }
-
-  /** Returns the use limit carried on the license, or {@code null}. */
-  public Integer maxUses() {
-    return maxUses;
   }
 
   /** Returns how many machines are currently registered against this license. */
@@ -209,11 +198,6 @@ public final class License {
   /** Returns the license's expiration timestamp, or {@code null} if none. */
   public Instant expiry() {
     return expiry;
-  }
-
-  /** Returns the number of times the license has been used. */
-  public int uses() {
-    return uses;
   }
 
   /** Returns the timestamp of the license's last successful validation, or {@code null}. */
@@ -307,9 +291,9 @@ public final class License {
     }
     Attributes attrs = resource.attributes();
     if (attrs == null) {
-      return new License(resource.id(), null, false, null, 0, null, null, null);
+      return new License(resource.id(), null, false, null, null, null, null);
     }
-    return new License(resource.id(), attrs.key, attrs.suspended, attrs.expiry, attrs.uses,
+    return new License(resource.id(), attrs.key, attrs.suspended, attrs.expiry,
         attrs.lastValidatedAt, attrs.lastCheckInAt, attrs.metadata);
   }
 
@@ -323,7 +307,6 @@ public final class License {
     }
     License license = (License) other;
     return suspended == license.suspended
-        && uses == license.uses
         && Objects.equals(id, license.id)
         && Objects.equals(key, license.key)
         && Objects.equals(expiry, license.expiry)
@@ -334,7 +317,7 @@ public final class License {
 
   @Override
   public int hashCode() {
-    return Objects.hash(id, key, suspended, expiry, uses, lastValidatedAt, lastCheckInAt, metadata);
+    return Objects.hash(id, key, suspended, expiry, lastValidatedAt, lastCheckInAt, metadata);
   }
 
   /** The JSON:API {@code attributes} bag for a license resource. */
@@ -342,21 +325,19 @@ public final class License {
     private final String key;
     private final boolean suspended;
     private final Instant expiry;
-    private final int uses;
     private final Instant lastValidatedAt;
     private final Instant lastCheckInAt;
     private final Map<String, Object> metadata;
 
     @JsonCreator
     Attributes(@JsonProperty("key") String key, @JsonProperty("suspended") boolean suspended,
-        @JsonProperty("expiry") Instant expiry, @JsonProperty("uses") int uses,
+        @JsonProperty("expiry") Instant expiry,
         @JsonProperty("last_validated_at") Instant lastValidatedAt,
         @JsonProperty("last_check_in_at") Instant lastCheckInAt,
         @JsonProperty("metadata") Map<String, Object> metadata) {
       this.key = key;
       this.suspended = suspended;
       this.expiry = expiry;
-      this.uses = uses;
       this.lastValidatedAt = lastValidatedAt;
       this.lastCheckInAt = lastCheckInAt;
       this.metadata = metadata;

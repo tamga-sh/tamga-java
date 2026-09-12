@@ -94,6 +94,8 @@ public class TamgaApiException extends RuntimeException {
         return new LicenseExpiredException(error, httpStatus, responseMetadata);
       case "LICENSE_NOT_ALLOWED":
         return new LicenseNotAllowedException(error, httpStatus, responseMetadata);
+      case "METER_LIMIT_EXCEEDED":
+        return new MeterLimitExceededException(error, httpStatus, responseMetadata);
       default:
         return new TamgaApiException(error, httpStatus, responseMetadata);
     }
@@ -408,6 +410,35 @@ public class TamgaApiException extends RuntimeException {
 
     LicenseNotAllowedException(TamgaError error, int status, ResponseMetadata metadata) {
       super(error, status, metadata);
+    }
+  }
+
+  /**
+   * A meter entitlement's cap would be exceeded by the requested increment. HTTP 422, raised by
+   * {@code POST .../entitlements/{id}/actions/increment} (never by {@code decrement} or
+   * {@code reset}) when {@code current_value + increment > max_value}. Replaces the retired
+   * {@code TOO_MANY_USES} validation code, which this is not a version of -- it is a direct action
+   * error, never a {@code validate} verdict.
+   *
+   * <p>{@code TamgaClient.incrementEntitlementUsage} catches this and rethrows
+   * {@link TamgaMeterLimitExceededException}, mirroring how {@code activateMachine} normalizes
+   * {@link MachineLimitExceededException} into {@link TamgaMachineOverLimitException} -- prefer
+   * catching that friendlier type over this one.
+   */
+  public static final class MeterLimitExceededException extends TamgaApiException {
+    private static final long serialVersionUID = 1L;
+
+    MeterLimitExceededException(TamgaError error, int status, ResponseMetadata metadata) {
+      super(error, status, metadata);
+    }
+
+    /**
+     * Returns the id of the entitlement whose cap was exceeded, from {@code meta.entitlement_id},
+     * or {@code null} if the server did not send it.
+     */
+    public String entitlementId() {
+      String id = error() == null ? null : error().meta().get("entitlement_id");
+      return id == null || id.isEmpty() ? null : id;
     }
   }
 }

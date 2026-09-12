@@ -136,7 +136,6 @@ class PolicyTest {
     Policy policy = parse("{\"max_machines\":null,\"created\":\"not-a-timestamp\"}");
 
     assertThat(policy.maxMachines()).isNull();
-    assertThat(policy.maxUses()).isNull();
     assertThat(policy.created()).isNull();
     assertThat(policy.metadata()).isNull();
   }
@@ -147,7 +146,7 @@ class PolicyTest {
     // against a real decode rather than left to rot behind an untested getter.
     Policy policy = parse("{\"name\":\"Pro\",\"product_id\":\"prod-1\","
         + "\"scheme\":\"ED25519_SIGN\",\"max_machines\":5,\"max_cores\":8,"
-        + "\"max_processes\":16,\"max_users\":4,\"max_uses\":100,\"duration\":31536000,"
+        + "\"max_processes\":16,\"max_users\":4,\"duration\":31536000,"
         + "\"heartbeat_duration\":900,\"check_in_interval\":\"week\","
         + "\"check_in_interval_count\":2,\"overage_strategy\":\"ALLOW_2X_OVERAGE\","
         + "\"heartbeat_cull_strategy\":\"KEEP_DEAD\","
@@ -163,7 +162,6 @@ class PolicyTest {
     assertThat(policy.scheme()).isEqualTo("ED25519_SIGN");
     assertThat(policy.maxProcesses()).isEqualTo(16);
     assertThat(policy.maxUsers()).isEqualTo(4);
-    assertThat(policy.maxUses()).isEqualTo(100);
     assertThat(policy.checkInIntervalCount()).isEqualTo(2);
     assertThat(policy.checkInInterval()).isEqualTo(Policy.CheckInInterval.WEEK);
     assertThat(policy.heartbeatCullStrategyRaw()).isEqualTo("KEEP_DEAD");

@@ -45,7 +45,6 @@ class LicenseFileTest {
     byte[] publicKey = key.generatePublicKey().getEncoded();
     License license = file.verifyAndDecrypt(publicKey, "unused-for-plain");
 
-    assertThat(license.uses()).isEqualTo(3);
     assertThat(license.expiry()).isNotNull();
     assertThat(license.lastValidatedAt()).isNotNull();
     assertThat(license.lastCheckInAt()).isNotNull();
@@ -342,7 +341,7 @@ class LicenseFileTest {
     // check.
     Ed25519PrivateKeyParameters key = generateKey();
     byte[] v1 = ("{\"data\":{\"id\":\"lic_123\",\"type\":\"licenses\","
-        + "\"attributes\":{\"key\":\"K\",\"suspended\":false,\"uses\":0}}}")
+        + "\"attributes\":{\"key\":\"K\",\"suspended\":false}}}")
         .getBytes(java.nio.charset.StandardCharsets.UTF_8);
     String enc = CheckoutFixture.plainEnc(v1);
     String pem = CheckoutFixture.wrapLicensePem(

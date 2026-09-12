@@ -9,10 +9,17 @@ import com.fasterxml.jackson.annotation.JsonEnumDefaultValue;
  * <p>{@code code} is stable and is what callers should branch on. The sibling {@code detail} field
  * is human-readable text whose wording may change between server versions -- never match on it.
  *
- * <p>All 24 wire values are modeled for schema completeness, but <b>only 19 are reachable</b>
+ * <p>All 23 wire values are modeled for schema completeness, but <b>only 18 are reachable</b>
  * against the server today. Each constant below is marked reachable or unreachable; do not build
  * product behaviour around an unreachable one. Unknown future values decode to {@link #UNKNOWN}
  * rather than throwing, so a server-side addition can never break a released SDK.
+ *
+ * <p>The retired global per-license usage counter's verdict, {@code TOO_MANY_USES}, is gone from
+ * this vocabulary entirely -- it is not renamed or replaced here. Its replacement, named
+ * per-entitlement meters, is not part of the license validation flow at all: a meter's cap is
+ * enforced by {@code TamgaClient.incrementEntitlementUsage}/{@code decrementEntitlementUsage}
+ * directly, surfaced as {@code 422 METER_LIMIT_EXCEEDED} and
+ * {@link sh.tamga.sdk.error.TamgaMeterLimitExceededException}, never as a {@code validate} verdict.
  */
 public enum ValidationCode {
 
@@ -42,11 +49,6 @@ public enum ValidationCode {
   TOO_MUCH_DISK,
   /** Process count exceeded {@code policy.max_processes}. Reachable. */
   TOO_MANY_PROCESSES,
-  /**
-   * Uses reached {@code max_uses}. Reachable. The comparison is a strict {@code >=} and overage
-   * strategies never apply to uses, unlike every other limit above.
-   */
-  TOO_MANY_USES,
 
   /**
    * Unreachable: the handler returns a bare HTTP 404 rather than emitting this code. Declared for
@@ -158,7 +160,7 @@ public enum ValidationCode {
   }
 
   /**
-   * Returns whether this code is one of the 19 the server can actually emit today. Useful for
+   * Returns whether this code is one of the 18 the server can actually emit today. Useful for
    * assertions and diagnostics; product logic should switch on the constant itself.
    */
   public boolean reachable() {
@@ -178,7 +180,6 @@ public enum ValidationCode {
       case TOO_MUCH_MEMORY:
       case TOO_MUCH_DISK:
       case TOO_MANY_PROCESSES:
-      case TOO_MANY_USES:
       case TOO_MANY_USERS:
       case HEARTBEAT_DEAD:
       case HEARTBEAT_NOT_STARTED:
