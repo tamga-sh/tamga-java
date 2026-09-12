@@ -8,12 +8,14 @@ import org.junit.jupiter.api.Test;
 class ValidationCodeTest {
 
   @Test
-  void allTwentyFourWireValuesAreModelledPlusTheUnknownFallback() {
-    assertThat(ValidationCode.values()).hasSize(25);
+  void allTwentyThreeWireValuesAreModelledPlusTheUnknownFallback() {
+    // TOO_MANY_USES was retired along with the global uses/max_uses counter it reported --
+    // 24 documented values before, 23 now, plus UNKNOWN.
+    assertThat(ValidationCode.values()).hasSize(24);
   }
 
   @Test
-  void exactlyNineteenCodesAreReachable() {
+  void exactlyEighteenCodesAreReachable() {
     long reachable = 0;
     for (ValidationCode code : ValidationCode.values()) {
       if (code.reachable()) {
@@ -21,7 +23,7 @@ class ValidationCodeTest {
       }
     }
 
-    assertThat(reachable).isEqualTo(19);
+    assertThat(reachable).isEqualTo(18);
   }
 
   @Test
@@ -93,10 +95,6 @@ class ValidationCodeTest {
     assertThat(ValidationCode.TOO_MUCH_MEMORY.overLimit()).isTrue();
     assertThat(ValidationCode.TOO_MUCH_DISK.overLimit()).isTrue();
     assertThat(ValidationCode.TOO_MANY_PROCESSES.overLimit()).isTrue();
-
-    // Uses are compared strictly and are never subject to an overage strategy, so exceeding them
-    // is not a rollback trigger.
-    assertThat(ValidationCode.TOO_MANY_USES.overLimit()).isFalse();
     assertThat(ValidationCode.VALID.overLimit()).isFalse();
     assertThat(ValidationCode.EXPIRED.overLimit()).isFalse();
   }

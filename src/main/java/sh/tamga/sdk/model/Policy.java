@@ -45,7 +45,6 @@ public final class Policy {
   private final Integer maxCores;
   private final Integer maxProcesses;
   private final Integer maxUsers;
-  private final Integer maxUses;
   private final Long duration;
   private final Integer heartbeatDuration;
   private final Integer checkInIntervalCount;
@@ -78,7 +77,6 @@ public final class Policy {
     this.maxCores = WireNodes.integer(attrs, "max_cores");
     this.maxProcesses = WireNodes.integer(attrs, "max_processes");
     this.maxUsers = WireNodes.integer(attrs, "max_users");
-    this.maxUses = WireNodes.integer(attrs, "max_uses");
     this.duration = WireNodes.longValue(attrs, "duration");
     this.heartbeatDuration = WireNodes.integer(attrs, "heartbeat_duration");
     this.checkInIntervalCount = WireNodes.integer(attrs, "check_in_interval_count");
@@ -151,11 +149,6 @@ public final class Policy {
   /** Returns the user limit, or {@code null} when unlimited. */
   public Integer maxUsers() {
     return maxUsers;
-  }
-
-  /** Returns the use limit, or {@code null} when unlimited. Uses ignore the overage strategy. */
-  public Integer maxUses() {
-    return maxUses;
   }
 
   /** Returns the license duration in seconds, or {@code null} when perpetual. */
@@ -327,8 +320,7 @@ public final class Policy {
   }
 
   /**
-   * How far past a numeric limit a license may go before validation fails. Never applies to
-   * {@code uses}, which the server always compares strictly.
+   * How far past a numeric limit a license may go before validation fails.
    */
   public enum OverageStrategy {
     /** Enforces the limit strictly: {@code count <= max}. */
