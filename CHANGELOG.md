@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.5](https://github.com/tamga-sh/tamga-java/compare/v1.4.4...v1.4.5) (2026-09-12)
+
+
+### Bug Fixes
+
+* replace retired uses/max_uses counter with per-entitlement meters ([#55](https://github.com/tamga-sh/tamga-java/issues/55)) ([dd08fa9](https://github.com/tamga-sh/tamga-java/commit/dd08fa92f765988e782b291dca951820b16ff614))
+
 ## [1.4.4](https://github.com/tamga-sh/tamga-java/compare/v1.4.3...v1.4.4) (2026-09-05)
 
 
