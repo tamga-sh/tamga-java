@@ -137,8 +137,8 @@ dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter:5.14.4")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
     testImplementation("org.assertj:assertj-core:3.27.7")
-    testImplementation("org.mockito:mockito-core:5.23.0")
-    testImplementation("org.mockito:mockito-junit-jupiter:5.23.0")
+    testImplementation("org.mockito:mockito-core:5.24.0")
+    testImplementation("org.mockito:mockito-junit-jupiter:5.24.0")
     // A real loopback HTTP server for transport/client tests, mirroring how tamga-go tests its
     // client against net/http/httptest rather than a mocked round-tripper: the request actually
     // goes over a socket, so header construction, URL escaping and retry behaviour are exercised
